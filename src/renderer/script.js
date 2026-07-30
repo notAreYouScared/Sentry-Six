@@ -1255,10 +1255,17 @@ function setMultiLayout(layoutId) {
  * GM footage.  FRONT/REAR reuse the shared "front"/"back" names, so
  * checking for the side cameras is enough.
  */
-function detectAndSetLayout(groups) {
-    const isGm = Array.isArray(groups) && groups.some(g =>
+function isGmFootageGroups(groups) {
+    return Array.isArray(groups) && groups.some(g =>
         g.filesByCamera?.has('gm_left') || g.filesByCamera?.has('gm_right')
     );
+}
+
+function detectAndSetLayout(groups) {
+    const isGm = isGmFootageGroups(groups);
+    state.ui.telemetryUnavailable = isGm;
+    updateDashboardVisibility();
+    updateMapVisibility();
     const targetLayout = isGm ? 'gm_surroundvision' : DEFAULT_MULTI_LAYOUT;
     if (multi.layoutId !== targetLayout) {
         console.log('Auto-detected layout:', targetLayout, '(GM footage:', isGm, ')');
@@ -3968,6 +3975,7 @@ async function showCollectionAtMs(ms) {
 // Visualization Logic - support both camelCase (protobufjs) and snake_case
 function updateVisualization(sei) {
     if (!sei) return;
+    if (state?.ui?.telemetryUnavailable) return;
 
     // This runs at ~60Hz during playback — skip all DOM work when the user
     // has hidden both overlays it feeds.
@@ -4625,7 +4633,7 @@ async function loadNativeSegment(segIdx) {
     // Pre-extract SEI telemetry from master camera file (runs in background)
     const masterCam = multi.masterCamera || 'front';
     const masterEntry = group.filesByCamera.get(masterCam) || group.filesByCamera.values().next().value;
-    if (masterEntry && seiType) {
+    if (!state?.ui?.telemetryUnavailable && masterEntry && seiType) {
         extractSeiFromEntry(masterEntry, seiType).then(({ seiData, mapPath }) => {
             nativeVideo.seiData = seiData;
             // If the active collection has a full drive route, use it for the map
