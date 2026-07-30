@@ -2135,7 +2135,7 @@ async function traverseDirectoryElectron(dirPath) {
             // If no Tesla folder structure found, check for loose video clips directly in the folder
             // or for a GM Surround Vision recording tree (Android/media/.../SurroundVisionRecorder).
             if (!foundClipFolders) {
-                // Check for GM Surround Vision path first (Android/media/... deep tree)
+                // 1) Android SD card: deep SurroundVisionRecorder tree
                 const hasAndroid = entries.some(e => e.isDirectory && e.name.toLowerCase() === 'android');
                 if (hasAndroid) {
                     const gmPath = await findGmRecordingsPath(dirPath);
@@ -2145,6 +2145,10 @@ async function traverseDirectoryElectron(dirPath) {
                     } else {
                         await scanLooseClipsElectron(dirPath);
                     }
+                // 2) GM Dash-USB Continuous layout: YYYY-MM-DD date subfolders with GM-named files
+                } else if (await isGmDateFolderStructure(entries)) {
+                    await scanGmContinuousFoldersElectron(dirPath);
+                // 3) Tesla loose clips or other custom structures
                 } else {
                     await scanLooseClipsElectron(dirPath);
                 }
@@ -2391,6 +2395,63 @@ async function scanGmRecordingsFolder(dirPath) {
 }
 
 /**
+ * Return true when the given Electron entry list looks like a GM Dash-USB
+ * "Continuous" folder: direct children are YYYY-MM-DD directories whose
+ * contents include GM-style clip filenames (CAMERA_YYYY_MM_DD_T_HH_MM_SS.mp4).
+ * Only the first matching date subfolder is peeked into for speed.
+ */
+async function isGmDateFolderStructure(entries) {
+    const dateFolders = entries.filter(e => e.isDirectory && /^\d{4}-\d{2}-\d{2}$/.test(e.name));
+    if (!dateFolders.length) return false;
+    try {
+        const subEntries = await window.electronAPI.readDir(dateFolders[0].path);
+        return subEntries.some(e =>
+            e.isFile &&
+            /^(?:FRONT|LEFT|RIGHT|REAR|INTERIOR)_\d{4}_\d{2}_\d{2}_T_\d{2}_\d{2}_\d{2}\.mp4$/i.test(e.name)
+        );
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Scan a GM Dash-USB "Continuous" folder whose immediate children are
+ * YYYY-MM-DD date directories containing GM-named clip files.
+ * Each date directory is registered in folderStructure so that
+ * loadDateContentElectron can load it later via the loose-clips path.
+ */
+async function scanGmContinuousFoldersElectron(dirPath) {
+    try {
+        const entries = await window.electronAPI.readDir(dirPath);
+        for (const entry of entries) {
+            if (!entry.isDirectory || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+            const date = entry.name;
+            folderStructure.dates.add(date);
+            if (!folderStructure.dateHandles.has(date)) {
+                folderStructure.dateHandles.set(date, {
+                    recent: null,
+                    sentry: new Map(),
+                    saved: new Map(),
+                    loose: { path: dirPath, isLoose: true, subfolders: [entry.path] },
+                    isCustomStructure: true
+                });
+            } else {
+                const d = folderStructure.dateHandles.get(date);
+                d.isCustomStructure = true;
+                if (!d.loose) {
+                    d.loose = { path: dirPath, isLoose: true, subfolders: [entry.path] };
+                } else if (!d.loose.subfolders?.includes(entry.path)) {
+                    d.loose.subfolders = [...(d.loose.subfolders || []), entry.path];
+                }
+            }
+        }
+        folderStructure.isCustomStructure = true;
+    } catch (err) {
+        console.warn('Error scanning GM date folders:', err);
+    }
+}
+
+/**
  * Gather all Electron file entries for a single date from folderStructure.
  * Returns raw file-like objects without building an index.
  * Used by both loadDateContentElectron and selectDriveCollection (multi-date).
@@ -2617,7 +2678,11 @@ async function traverseDirectoryHandle(dirHandle) {
             
             // If no Tesla folder structure found, check for loose video clips directly in the folder
             if (!foundClipFolders) {
-                await scanLooseClipsForDates(dirHandle);
+                if (await isGmDateFolderStructureHandle(dirHandle)) {
+                    await scanGmContinuousFoldersForDates(dirHandle);
+                } else {
+                    await scanLooseClipsForDates(dirHandle);
+                }
             }
         }
     } catch (err) {
@@ -2720,6 +2785,61 @@ async function scanEventFolderForDates(handle, clipType) {
         }
     } catch (err) {
         console.warn(`Error scanning ${clipType} folder:`, err);
+    }
+}
+
+/**
+ * Return true when the given File System Access API directory handle looks like
+ * a GM Dash-USB "Continuous" folder: direct children are YYYY-MM-DD directories
+ * whose contents include GM-style filenames (CAMERA_YYYY_MM_DD_T_HH_MM_SS.mp4).
+ * Only the first matching date subfolder is peeked into for speed.
+ */
+async function isGmDateFolderStructureHandle(dirHandle) {
+    try {
+        for await (const entry of dirHandle.values()) {
+            if (entry.kind !== 'directory' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+            for await (const sub of entry.values()) {
+                if (
+                    sub.kind === 'file' &&
+                    /^(?:FRONT|LEFT|RIGHT|REAR|INTERIOR)_\d{4}_\d{2}_\d{2}_T_\d{2}_\d{2}_\d{2}\.mp4$/i.test(sub.name)
+                ) {
+                    return true;
+                }
+            }
+            return false; // only inspect the first date subfolder
+        }
+    } catch {
+        return false;
+    }
+    return false;
+}
+
+/**
+ * Scan a GM Dash-USB "Continuous" folder (File System Access API path) whose
+ * immediate children are YYYY-MM-DD date directories containing GM-named clips.
+ * Each date directory handle is stored as dateData.loose so that loadDateContent
+ * can iterate over its files directly.
+ */
+async function scanGmContinuousFoldersForDates(dirHandle) {
+    try {
+        for await (const entry of dirHandle.values()) {
+            if (entry.kind !== 'directory' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+            const date = entry.name;
+            folderStructure.dates.add(date);
+            if (!folderStructure.dateHandles.has(date)) {
+                folderStructure.dateHandles.set(date, {
+                    recent: null,
+                    sentry: new Map(),
+                    saved: new Map(),
+                    loose: entry
+                });
+            } else {
+                const d = folderStructure.dateHandles.get(date);
+                if (!d.loose) d.loose = entry;
+            }
+        }
+    } catch (err) {
+        console.warn('Error scanning GM date folders:', err);
     }
 }
 
