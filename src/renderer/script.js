@@ -1245,6 +1245,34 @@ function setMultiLayout(layoutId) {
     }
 }
 
+/**
+ * Inspect the loaded clip groups and switch to the GM Surround Vision
+ * multi-cam layout when GM footage is detected, or reset to the Tesla
+ * default when non-GM footage is loaded.
+ *
+ * Detection heuristic: any group whose filesByCamera map contains a
+ * GM-specific camera name (gm_left or gm_right) identifies the set as
+ * GM footage.  FRONT/REAR reuse the shared "front"/"back" names, so
+ * checking for the side cameras is enough.
+ */
+function isGmFootageGroups(groups) {
+    return Array.isArray(groups) && groups.some(g =>
+        g.filesByCamera?.has('gm_left') || g.filesByCamera?.has('gm_right')
+    );
+}
+
+function detectAndSetLayout(groups) {
+    const isGm = isGmFootageGroups(groups);
+    state.ui.telemetryUnavailable = isGm;
+    updateDashboardVisibility();
+    updateMapVisibility();
+    const targetLayout = isGm ? 'gm_surroundvision' : DEFAULT_MULTI_LAYOUT;
+    if (multi.layoutId !== targetLayout) {
+        console.log('Auto-detected layout:', targetLayout, '(GM footage:', isGm, ')');
+        setMultiLayout(targetLayout);
+    }
+}
+
 // Initialize zoom/pan module
 initZoomPan({
     getMultiCamGrid: () => multiCamGrid,
@@ -2112,8 +2140,25 @@ async function traverseDirectoryElectron(dirPath) {
             }
             
             // If no Tesla folder structure found, check for loose video clips directly in the folder
+            // or for a GM Surround Vision recording tree (Android/media/.../SurroundVisionRecorder).
             if (!foundClipFolders) {
-                await scanLooseClipsElectron(dirPath);
+                // 1) Android SD card: deep SurroundVisionRecorder tree
+                const hasAndroid = entries.some(e => e.isDirectory && e.name.toLowerCase() === 'android');
+                if (hasAndroid) {
+                    const gmPath = await findGmRecordingsPath(dirPath);
+                    if (gmPath) {
+                        console.log('Found GM SurroundVisionRecorder at:', gmPath);
+                        await scanGmRecordingsFolder(gmPath);
+                    } else {
+                        await scanLooseClipsElectron(dirPath);
+                    }
+                // 2) GM Dash-USB Continuous layout: YYYY-MM-DD date subfolders with GM-named files
+                } else if (await isGmDateFolderStructure(entries)) {
+                    await scanGmContinuousFoldersElectron(dirPath);
+                // 3) Tesla loose clips or other custom structures
+                } else {
+                    await scanLooseClipsElectron(dirPath);
+                }
             }
         }
     } catch (err) {
@@ -2222,10 +2267,14 @@ async function scanEventFolderElectron(dirPath, clipType) {
     }
 }
 
-// Helper: extract date from a Tesla-style or generic video filename
+// Helper: extract date from a Tesla-style, GM-style, or generic video filename
 function extractDateFromFilename(filename) {
+    // Tesla format: YYYY-MM-DD_HH-MM-SS-camera.mp4
     const teslaMatch = filename.match(/^(\d{4}-\d{2}-\d{2})_/);
     if (teslaMatch) return teslaMatch[1];
+    // GM Surround Vision format: CAMERA_YYYY_MM_DD_T_HH_MI_SS.mp4
+    const gmMatch = filename.match(/^(?:FRONT|LEFT|RIGHT|REAR|INTERIOR)_(\d{4})_(\d{2})_(\d{2})_T_/i);
+    if (gmMatch) return `${gmMatch[1]}-${gmMatch[2]}-${gmMatch[3]}`;
     const compactMatch = filename.match(/(\d{4})(\d{2})(\d{2})/);
     if (compactMatch) return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
     return 'Unknown';
@@ -2303,6 +2352,109 @@ async function scanLooseClipsElectron(dirPath) {
         }
     } catch (err) {
         console.warn('Error scanning loose clips:', err);
+    }
+}
+
+/**
+ * Recursively search for the GM SurroundVisionRecorder folder under a given
+ * root path (up to `maxDepth` levels).  Returns the absolute path of the
+ * SurroundVisionRecorder directory, or null if not found.
+ */
+async function findGmRecordingsPath(currentPath, depth = 0) {
+    if (depth > 6) return null;
+    try {
+        const entries = await window.electronAPI.readDir(currentPath);
+        for (const entry of entries) {
+            if (entry.isDirectory && entry.name === 'SurroundVisionRecorder') {
+                return entry.path;
+            }
+        }
+        for (const entry of entries) {
+            if (!entry.isDirectory) continue;
+            const found = await findGmRecordingsPath(entry.path, depth + 1);
+            if (found) return found;
+        }
+    } catch (_) { /* ignore inaccessible paths */ }
+    return null;
+}
+
+/**
+ * Scan a GM SurroundVisionRecorder folder for MP4 clips and register dates
+ * in folderStructure so loadDateContentElectron can load them later.
+ */
+async function scanGmRecordingsFolder(dirPath) {
+    try {
+        const entries = await window.electronAPI.readDir(dirPath);
+        let found = false;
+        for (const entry of entries) {
+            if (!entry.isFile) continue;
+            const nameLower = entry.name.toLowerCase();
+            if (!nameLower.endsWith('.mp4')) continue;
+            const date = extractDateFromFilename(entry.name);
+            if (date === 'Unknown') continue;
+            registerLooseDate(date, dirPath);
+            found = true;
+        }
+        if (found) folderStructure.isCustomStructure = true;
+    } catch (err) {
+        console.warn('Error scanning GM recordings folder:', err);
+    }
+}
+
+/**
+ * Return true when the given Electron entry list looks like a GM Dash-USB
+ * "Continuous" folder: direct children are YYYY-MM-DD directories whose
+ * contents include GM-style clip filenames (CAMERA_YYYY_MM_DD_T_HH_MM_SS.mp4).
+ * Only the first matching date subfolder is peeked into for speed.
+ */
+async function isGmDateFolderStructure(entries) {
+    const dateFolders = entries.filter(e => e.isDirectory && /^\d{4}-\d{2}-\d{2}$/.test(e.name));
+    if (!dateFolders.length) return false;
+    try {
+        const subEntries = await window.electronAPI.readDir(dateFolders[0].path);
+        return subEntries.some(e =>
+            e.isFile &&
+            /^(?:FRONT|LEFT|RIGHT|REAR|INTERIOR)_\d{4}_\d{2}_\d{2}_T_\d{2}_\d{2}_\d{2}\.mp4$/i.test(e.name)
+        );
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Scan a GM Dash-USB "Continuous" folder whose immediate children are
+ * YYYY-MM-DD date directories containing GM-named clip files.
+ * Each date directory is registered in folderStructure so that
+ * loadDateContentElectron can load it later via the loose-clips path.
+ */
+async function scanGmContinuousFoldersElectron(dirPath) {
+    try {
+        const entries = await window.electronAPI.readDir(dirPath);
+        for (const entry of entries) {
+            if (!entry.isDirectory || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+            const date = entry.name;
+            folderStructure.dates.add(date);
+            if (!folderStructure.dateHandles.has(date)) {
+                folderStructure.dateHandles.set(date, {
+                    recent: null,
+                    sentry: new Map(),
+                    saved: new Map(),
+                    loose: { path: dirPath, isLoose: true, subfolders: [entry.path] },
+                    isCustomStructure: true
+                });
+            } else {
+                const d = folderStructure.dateHandles.get(date);
+                d.isCustomStructure = true;
+                if (!d.loose) {
+                    d.loose = { path: dirPath, isLoose: true, subfolders: [entry.path] };
+                } else if (!d.loose.subfolders?.includes(entry.path)) {
+                    d.loose.subfolders = [...(d.loose.subfolders || []), entry.path];
+                }
+            }
+        }
+        folderStructure.isCustomStructure = true;
+    } catch (err) {
+        console.warn('Error scanning GM date folders:', err);
     }
 }
 
@@ -2533,7 +2685,11 @@ async function traverseDirectoryHandle(dirHandle) {
             
             // If no Tesla folder structure found, check for loose video clips directly in the folder
             if (!foundClipFolders) {
-                await scanLooseClipsForDates(dirHandle);
+                if (await isGmDateFolderStructureHandle(dirHandle)) {
+                    await scanGmContinuousFoldersForDates(dirHandle);
+                } else {
+                    await scanLooseClipsForDates(dirHandle);
+                }
             }
         }
     } catch (err) {
@@ -2636,6 +2792,61 @@ async function scanEventFolderForDates(handle, clipType) {
         }
     } catch (err) {
         console.warn(`Error scanning ${clipType} folder:`, err);
+    }
+}
+
+/**
+ * Return true when the given File System Access API directory handle looks like
+ * a GM Dash-USB "Continuous" folder: direct children are YYYY-MM-DD directories
+ * whose contents include GM-style filenames (CAMERA_YYYY_MM_DD_T_HH_MM_SS.mp4).
+ * Only the first matching date subfolder is peeked into for speed.
+ */
+async function isGmDateFolderStructureHandle(dirHandle) {
+    try {
+        for await (const entry of dirHandle.values()) {
+            if (entry.kind !== 'directory' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+            for await (const sub of entry.values()) {
+                if (
+                    sub.kind === 'file' &&
+                    /^(?:FRONT|LEFT|RIGHT|REAR|INTERIOR)_\d{4}_\d{2}_\d{2}_T_\d{2}_\d{2}_\d{2}\.mp4$/i.test(sub.name)
+                ) {
+                    return true;
+                }
+            }
+            return false; // only inspect the first date subfolder
+        }
+    } catch {
+        return false;
+    }
+    return false;
+}
+
+/**
+ * Scan a GM Dash-USB "Continuous" folder (File System Access API path) whose
+ * immediate children are YYYY-MM-DD date directories containing GM-named clips.
+ * Each date directory handle is stored as dateData.loose so that loadDateContent
+ * can iterate over its files directly.
+ */
+async function scanGmContinuousFoldersForDates(dirHandle) {
+    try {
+        for await (const entry of dirHandle.values()) {
+            if (entry.kind !== 'directory' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+            const date = entry.name;
+            folderStructure.dates.add(date);
+            if (!folderStructure.dateHandles.has(date)) {
+                folderStructure.dateHandles.set(date, {
+                    recent: null,
+                    sentry: new Map(),
+                    saved: new Map(),
+                    loose: entry
+                });
+            } else {
+                const d = folderStructure.dateHandles.get(date);
+                if (!d.loose) d.loose = entry;
+            }
+        }
+    } catch (err) {
+        console.warn('Error scanning GM date folders:', err);
     }
 }
 
@@ -2849,6 +3060,9 @@ function mergeIntoLibrary(built, date) {
     library.allDates = dayResult.allDates;
     library.dayData = dayResult.dayData;
 
+    // Auto-switch to the correct multi-cam layout (GM vs Tesla)
+    detectAndSetLayout(library.clipGroups);
+
     selection.selectedGroupId = null;
     state.collection.active = null;
     previews.cache.clear();
@@ -3035,6 +3249,9 @@ async function handleFolderFiles(fileList, directoryName = null) {
     library.clipGroups = built.groups;
     library.clipGroupById = new Map(library.clipGroups.map(g => [g.id, g]));
     library.folderLabel = built.inferredRoot || directoryName || 'Folder';
+
+    // Auto-switch to the correct multi-cam layout (GM vs Tesla)
+    detectAndSetLayout(library.clipGroups);
 
     // Build virtual day-level collections (Sentry Studio–style day timelines)
     const dayResult = buildDayCollections(library.clipGroups);
@@ -3365,7 +3582,9 @@ function selectDayCollection(dayKey) {
 function updateCameraSelect(group) {
     const cams = Array.from(group.filesByCamera.keys());
     cameraSelect.innerHTML = '';
-    const ordered = ['front', 'back', 'left_repeater', 'right_repeater', 'left_pillar', 'right_pillar', ...cams];
+    // Tesla cameras first, then GM Surround Vision cameras, then any unknown extras
+    const ordered = ['front', 'back', 'left_repeater', 'right_repeater', 'left_pillar', 'right_pillar',
+                     'gm_left', 'gm_right', 'gm_interior', ...cams];
     const seen = new Set();
     for (const cam of ordered) {
         if (seen.has(cam)) continue;
@@ -3756,6 +3975,7 @@ async function showCollectionAtMs(ms) {
 // Visualization Logic - support both camelCase (protobufjs) and snake_case
 function updateVisualization(sei) {
     if (!sei) return;
+    if (state?.ui?.telemetryUnavailable) return;
 
     // This runs at ~60Hz during playback — skip all DOM work when the user
     // has hidden both overlays it feeds.
@@ -4413,7 +4633,7 @@ async function loadNativeSegment(segIdx) {
     // Pre-extract SEI telemetry from master camera file (runs in background)
     const masterCam = multi.masterCamera || 'front';
     const masterEntry = group.filesByCamera.get(masterCam) || group.filesByCamera.values().next().value;
-    if (masterEntry && seiType) {
+    if (!state?.ui?.telemetryUnavailable && masterEntry && seiType) {
         extractSeiFromEntry(masterEntry, seiType).then(({ seiData, mapPath }) => {
             nativeVideo.seiData = seiData;
             // If the active collection has a full drive route, use it for the map

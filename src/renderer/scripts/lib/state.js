@@ -82,7 +82,10 @@ function createInitialState() {
       nativeVideoMode: true,
 
       // Playback speed (0.5, 1, 2, 3, 4)
-      playbackRate: 1
+      playbackRate: 1,
+
+      // True when loaded footage does not provide Tesla SEI telemetry overlays.
+      telemetryUnavailable: false
     },
 
     collection: {
@@ -113,4 +116,3 @@ function createInitialState() {
 
 // Singleton used by the app.
 export const state = createInitialState();
-

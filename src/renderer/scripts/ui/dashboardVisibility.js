@@ -28,7 +28,7 @@ export function updateDashboardVisibility() {
     // Get current dashboard layout setting
     const compactDash = document.getElementById('dashboardVisCompact');
     const dashboardLayout = window.dashboardLayout || 'default';
-    const enabled = !!state?.ui?.dashboardEnabled;
+    const enabled = !!state?.ui?.dashboardEnabled && !state?.ui?.telemetryUnavailable;
 
     // Hide all first
     dashboardVis.classList.add('user-hidden');
