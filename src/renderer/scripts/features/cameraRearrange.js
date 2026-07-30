@@ -290,6 +290,10 @@ function getCameraTranslation(camera) {
     if (camera === 'right_repeater') return t('ui.cameras.rightRepeater');
     if (camera === 'left_pillar') return t('ui.cameras.leftPillar');
     if (camera === 'right_pillar') return t('ui.cameras.rightPillar');
+    // GM Surround Vision cameras
+    if (camera === 'gm_left') return t('ui.cameras.gmLeft');
+    if (camera === 'gm_right') return t('ui.cameras.gmRight');
+    if (camera === 'gm_interior') return t('ui.cameras.gmInterior');
     return camera;
 }
 

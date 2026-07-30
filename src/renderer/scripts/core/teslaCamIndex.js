@@ -67,10 +67,45 @@ export function parseClipFilename(name) {
     if (lower === 'event.mp4') return null;
 
     const m = name.match(/^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})-(.+)\.mp4$/i);
+    if (m) {
+        const timestampKey = `${m[1]}_${m[2]}`;
+        const cameraRaw = m[3];
+        return { timestampKey, camera: normalizeCamera(cameraRaw) };
+    }
+
+    // GM Surround Vision naming: CAMERA_YYYY_MM_DD_T_HH_MI_SS.mp4
+    // e.g. FRONT_2026_07_17_T_19_34_53.mp4
+    return parseGmFilename(name);
+}
+
+/**
+ * Parse a GM Surround Vision (Dash-USB) clip filename.
+ * Format: CAMERA_YYYY_MM_DD_T_HH_MI_SS.mp4
+ * Returns { timestampKey, camera } or null.
+ */
+export function parseGmFilename(name) {
+    if (!name.toLowerCase().endsWith('.mp4')) return null;
+    const m = name.match(/^(FRONT|LEFT|RIGHT|REAR|INTERIOR)_(\d{4})_(\d{2})_(\d{2})_T_(\d{2})_(\d{2})_(\d{2})\.mp4$/i);
     if (!m) return null;
-    const timestampKey = `${m[1]}_${m[2]}`;
-    const cameraRaw = m[3];
-    return { timestampKey, camera: normalizeCamera(cameraRaw) };
+    // Produce the same YYYY-MM-DD_HH-MM-SS key used everywhere else in the app.
+    const timestampKey = `${m[2]}-${m[3]}-${m[4]}_${m[5]}-${m[6]}-${m[7]}`;
+    return { timestampKey, camera: normalizeGmCamera(m[1].toUpperCase()), isGm: true };
+}
+
+/**
+ * Map a raw GM camera ID (e.g. "FRONT") to the internal camera name used by the app.
+ * FRONT/REAR reuse the Tesla names "front"/"back" so that existing layout and
+ * master-camera logic (which looks for "front") continues to work unchanged.
+ */
+function normalizeGmCamera(camUpper) {
+    switch (camUpper) {
+        case 'FRONT':    return 'front';
+        case 'LEFT':     return 'gm_left';
+        case 'RIGHT':    return 'gm_right';
+        case 'REAR':     return 'back';
+        case 'INTERIOR': return 'gm_interior';
+        default:         return camUpper.toLowerCase();
+    }
 }
 
 export function normalizeCamera(cameraRaw) {
@@ -91,6 +126,10 @@ export function cameraLabel(camera) {
     if (camera === 'right_repeater') return t('ui.cameras.rightRepeater');
     if (camera === 'left_pillar') return t('ui.cameras.leftPillar');
     if (camera === 'right_pillar') return t('ui.cameras.rightPillar');
+    // GM Surround Vision cameras
+    if (camera === 'gm_left') return t('ui.cameras.gmLeft');
+    if (camera === 'gm_right') return t('ui.cameras.gmRight');
+    if (camera === 'gm_interior') return t('ui.cameras.gmInterior');
     return camera;
 }
 

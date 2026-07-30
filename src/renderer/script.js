@@ -1245,6 +1245,27 @@ function setMultiLayout(layoutId) {
     }
 }
 
+/**
+ * Inspect the loaded clip groups and switch to the GM Surround Vision
+ * multi-cam layout when GM footage is detected, or reset to the Tesla
+ * default when non-GM footage is loaded.
+ *
+ * Detection heuristic: any group whose filesByCamera map contains a
+ * GM-specific camera name (gm_left or gm_right) identifies the set as
+ * GM footage.  FRONT/REAR reuse the shared "front"/"back" names, so
+ * checking for the side cameras is enough.
+ */
+function detectAndSetLayout(groups) {
+    const isGm = Array.isArray(groups) && groups.some(g =>
+        g.filesByCamera?.has('gm_left') || g.filesByCamera?.has('gm_right')
+    );
+    const targetLayout = isGm ? 'gm_surroundvision' : DEFAULT_MULTI_LAYOUT;
+    if (multi.layoutId !== targetLayout) {
+        console.log('Auto-detected layout:', targetLayout, '(GM footage:', isGm, ')');
+        setMultiLayout(targetLayout);
+    }
+}
+
 // Initialize zoom/pan module
 initZoomPan({
     getMultiCamGrid: () => multiCamGrid,
@@ -2112,8 +2133,21 @@ async function traverseDirectoryElectron(dirPath) {
             }
             
             // If no Tesla folder structure found, check for loose video clips directly in the folder
+            // or for a GM Surround Vision recording tree (Android/media/.../SurroundVisionRecorder).
             if (!foundClipFolders) {
-                await scanLooseClipsElectron(dirPath);
+                // Check for GM Surround Vision path first (Android/media/... deep tree)
+                const hasAndroid = entries.some(e => e.isDirectory && e.name.toLowerCase() === 'android');
+                if (hasAndroid) {
+                    const gmPath = await findGmRecordingsPath(dirPath);
+                    if (gmPath) {
+                        console.log('Found GM SurroundVisionRecorder at:', gmPath);
+                        await scanGmRecordingsFolder(gmPath);
+                    } else {
+                        await scanLooseClipsElectron(dirPath);
+                    }
+                } else {
+                    await scanLooseClipsElectron(dirPath);
+                }
             }
         }
     } catch (err) {
@@ -2222,10 +2256,14 @@ async function scanEventFolderElectron(dirPath, clipType) {
     }
 }
 
-// Helper: extract date from a Tesla-style or generic video filename
+// Helper: extract date from a Tesla-style, GM-style, or generic video filename
 function extractDateFromFilename(filename) {
+    // Tesla format: YYYY-MM-DD_HH-MM-SS-camera.mp4
     const teslaMatch = filename.match(/^(\d{4}-\d{2}-\d{2})_/);
     if (teslaMatch) return teslaMatch[1];
+    // GM Surround Vision format: CAMERA_YYYY_MM_DD_T_HH_MI_SS.mp4
+    const gmMatch = filename.match(/^(?:FRONT|LEFT|RIGHT|REAR|INTERIOR)_(\d{4})_(\d{2})_(\d{2})_T_/i);
+    if (gmMatch) return `${gmMatch[1]}-${gmMatch[2]}-${gmMatch[3]}`;
     const compactMatch = filename.match(/(\d{4})(\d{2})(\d{2})/);
     if (compactMatch) return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
     return 'Unknown';
@@ -2303,6 +2341,52 @@ async function scanLooseClipsElectron(dirPath) {
         }
     } catch (err) {
         console.warn('Error scanning loose clips:', err);
+    }
+}
+
+/**
+ * Recursively search for the GM SurroundVisionRecorder folder under a given
+ * root path (up to `maxDepth` levels).  Returns the absolute path of the
+ * SurroundVisionRecorder directory, or null if not found.
+ */
+async function findGmRecordingsPath(currentPath, depth = 0) {
+    if (depth > 6) return null;
+    try {
+        const entries = await window.electronAPI.readDir(currentPath);
+        for (const entry of entries) {
+            if (entry.isDirectory && entry.name === 'SurroundVisionRecorder') {
+                return entry.path;
+            }
+        }
+        for (const entry of entries) {
+            if (!entry.isDirectory) continue;
+            const found = await findGmRecordingsPath(entry.path, depth + 1);
+            if (found) return found;
+        }
+    } catch (_) { /* ignore inaccessible paths */ }
+    return null;
+}
+
+/**
+ * Scan a GM SurroundVisionRecorder folder for MP4 clips and register dates
+ * in folderStructure so loadDateContentElectron can load them later.
+ */
+async function scanGmRecordingsFolder(dirPath) {
+    try {
+        const entries = await window.electronAPI.readDir(dirPath);
+        let found = false;
+        for (const entry of entries) {
+            if (!entry.isFile) continue;
+            const nameLower = entry.name.toLowerCase();
+            if (!nameLower.endsWith('.mp4')) continue;
+            const date = extractDateFromFilename(entry.name);
+            if (date === 'Unknown') continue;
+            registerLooseDate(date, dirPath);
+            found = true;
+        }
+        if (found) folderStructure.isCustomStructure = true;
+    } catch (err) {
+        console.warn('Error scanning GM recordings folder:', err);
     }
 }
 
@@ -2849,6 +2933,9 @@ function mergeIntoLibrary(built, date) {
     library.allDates = dayResult.allDates;
     library.dayData = dayResult.dayData;
 
+    // Auto-switch to the correct multi-cam layout (GM vs Tesla)
+    detectAndSetLayout(library.clipGroups);
+
     selection.selectedGroupId = null;
     state.collection.active = null;
     previews.cache.clear();
@@ -3035,6 +3122,9 @@ async function handleFolderFiles(fileList, directoryName = null) {
     library.clipGroups = built.groups;
     library.clipGroupById = new Map(library.clipGroups.map(g => [g.id, g]));
     library.folderLabel = built.inferredRoot || directoryName || 'Folder';
+
+    // Auto-switch to the correct multi-cam layout (GM vs Tesla)
+    detectAndSetLayout(library.clipGroups);
 
     // Build virtual day-level collections (Sentry Studio–style day timelines)
     const dayResult = buildDayCollections(library.clipGroups);
@@ -3365,7 +3455,9 @@ function selectDayCollection(dayKey) {
 function updateCameraSelect(group) {
     const cams = Array.from(group.filesByCamera.keys());
     cameraSelect.innerHTML = '';
-    const ordered = ['front', 'back', 'left_repeater', 'right_repeater', 'left_pillar', 'right_pillar', ...cams];
+    // Tesla cameras first, then GM Surround Vision cameras, then any unknown extras
+    const ordered = ['front', 'back', 'left_repeater', 'right_repeater', 'left_pillar', 'right_pillar',
+                     'gm_left', 'gm_right', 'gm_interior', ...cams];
     const seen = new Set();
     for (const cam of ordered) {
         if (seen.has(cam)) continue;
