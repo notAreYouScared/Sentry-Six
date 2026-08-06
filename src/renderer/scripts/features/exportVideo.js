@@ -590,6 +590,35 @@ function detectAvailableCameras(state) {
 }
 
 /**
+ * Camera aliases used by export UI/legacy keys to resolve real files in a group.
+ * GM Surround Vision stores side cameras as gm_left/gm_right.
+ */
+function getExportCameraAliases(camera) {
+    switch (camera) {
+        case 'left_repeater': return ['left_repeater', 'gm_left'];
+        case 'right_repeater': return ['right_repeater', 'gm_right'];
+        case 'gm_left': return ['gm_left', 'left_repeater'];
+        case 'gm_right': return ['gm_right', 'right_repeater'];
+        default: return [camera];
+    }
+}
+
+function isExportCameraAvailable(availableCameras, camera) {
+    if (!availableCameras || availableCameras.size === 0) return false;
+    return getExportCameraAliases(camera).some(alias => availableCameras.has(alias));
+}
+
+function resolveGroupCameraEntry(group, camera) {
+    for (const alias of getExportCameraAliases(camera)) {
+        const entry = group?.filesByCamera?.get(alias);
+        if (entry?.file) {
+            return { entry, resolvedCamera: alias };
+        }
+    }
+    return { entry: null, resolvedCamera: null };
+}
+
+/**
  * Update camera checkbox visibility based on available cameras
  * Hides pillar camera options for HW3 vehicles (4-cam systems)
  * @param {Set<string>} availableCameras - Set of available camera names
@@ -614,7 +643,7 @@ function updateCameraCheckboxVisibility(availableCameras) {
         } else {
             // Show and check available cameras
             card.style.display = '';
-            checkbox.checked = availableCameras.has(camera);
+            checkbox.checked = isExportCameraAvailable(availableCameras, camera);
         }
     });
 
@@ -1219,7 +1248,7 @@ export async function openBlurZoneEditorForCamera(snapshotCamera, editorModal, e
         }
 
         const group = groups[targetSegment];
-        const entry = group?.filesByCamera?.get(snapshotCamera);
+        const { entry, resolvedCamera } = resolveGroupCameraEntry(group, snapshotCamera);
 
         if (!entry?.file) {
             notify(t('ui.notifications.couldNotFindVideoFile', { camera: snapshotCamera }), { type: 'error' });
@@ -1279,7 +1308,8 @@ export async function openBlurZoneEditorForCamera(snapshotCamera, editorModal, e
 
         // Mirror the snapshot for cameras that are mirrored in viewer/export (back and repeaters only)
         // Respect the global mirrorCameras setting
-        const shouldMirror = window._mirrorCameras !== false && ['back', 'left_repeater', 'right_repeater'].includes(snapshotCamera);
+        const mirrorCamera = resolvedCamera || snapshotCamera;
+        const shouldMirror = window._mirrorCameras !== false && ['back', 'left_repeater', 'right_repeater'].includes(mirrorCamera);
 
         // Initialize editor with snapshot
         editorModal.classList.remove('hidden');
@@ -1303,6 +1333,8 @@ function renderBlurZoneList() {
         back: t('ui.cameras.back'),
         left_repeater: t('ui.cameras.leftRepeater'),
         right_repeater: t('ui.cameras.rightRepeater'),
+        gm_left: t('ui.cameras.gmLeft'),
+        gm_right: t('ui.cameras.gmRight'),
         left_pillar: t('ui.cameras.leftPillar'),
         right_pillar: t('ui.cameras.rightPillar')
     };
@@ -1508,7 +1540,7 @@ function updateBlurZoneStatusDisplay() {
         if (statusEl) statusEl.classList.remove('hidden');
         const cameras = [...new Set(exportState.blurZones.map(z => z.camera))];
         const cameraNames = cameras.map(c => {
-            const names = { front: t('ui.cameras.front'), back: t('ui.cameras.back'), left_repeater: t('ui.cameras.leftRepeater'), right_repeater: t('ui.cameras.rightRepeater'), left_pillar: t('ui.cameras.leftPillar'), right_pillar: t('ui.cameras.rightPillar') };
+            const names = { front: t('ui.cameras.front'), back: t('ui.cameras.back'), left_repeater: t('ui.cameras.leftRepeater'), right_repeater: t('ui.cameras.rightRepeater'), gm_left: t('ui.cameras.gmLeft'), gm_right: t('ui.cameras.gmRight'), left_pillar: t('ui.cameras.leftPillar'), right_pillar: t('ui.cameras.rightPillar') };
             return names[c] || c;
         });
         // Show blur zone count - dashboard status depends on blur type, handled separately
@@ -1851,7 +1883,7 @@ export async function startExport() {
         const blurCameras = [...new Set(exportState.blurZones.map(z => z.camera))];
         const unselectedBlurCameras = blurCameras.filter(c => !cameras.includes(c));
         if (unselectedBlurCameras.length > 0) {
-            const cameraNames = { front: t('ui.cameras.front'), back: t('ui.cameras.back'), left_repeater: t('ui.cameras.leftRepeater'), right_repeater: t('ui.cameras.rightRepeater'), left_pillar: t('ui.cameras.leftPillar'), right_pillar: t('ui.cameras.rightPillar') };
+            const cameraNames = { front: t('ui.cameras.front'), back: t('ui.cameras.back'), left_repeater: t('ui.cameras.leftRepeater'), right_repeater: t('ui.cameras.rightRepeater'), gm_left: t('ui.cameras.gmLeft'), gm_right: t('ui.cameras.gmRight'), left_pillar: t('ui.cameras.leftPillar'), right_pillar: t('ui.cameras.rightPillar') };
             const names = unselectedBlurCameras.map(c => cameraNames[c] || c).join(', ');
             notify(t('ui.export.blurZonesWarning', { cameras: names }), { type: 'warn' });
         }
@@ -2119,7 +2151,7 @@ export async function startExport() {
 
         const files = {};
         for (const camera of cameras) {
-            const entry = group.filesByCamera?.get(camera);
+            const { entry } = resolveGroupCameraEntry(group, camera);
             if (entry?.file) {
                 if (entry.file.path) {
                     files[camera] = entry.file.path;
