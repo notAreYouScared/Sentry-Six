@@ -1236,6 +1236,13 @@ canvas,
     text-overflow: ellipsis;
 }
 
+.clip-title--wrap {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.25;
+}
+
 .clip-badges {
     display: flex;
     flex-wrap: wrap;

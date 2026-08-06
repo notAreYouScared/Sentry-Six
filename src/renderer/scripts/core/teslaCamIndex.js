@@ -7,6 +7,11 @@ import { yieldToUI } from '../ui/loadingOverlay.js';
 import { t } from '../lib/i18n.js';
 import { parseTimestampKeyToEpochMs } from './clipBrowser.js';
 
+/** GM Surround Vision records in 5-minute segments. */
+const GM_SEGMENT_MS = 5 * 60 * 1000;
+/** Tolerance when matching the 5-minute gap (±30 seconds). */
+const GM_SEGMENT_TOLERANCE_MS = 30 * 1000;
+
 export function getRootFolderNameFromWebkitRelativePath(relPath) {
     if (!relPath || typeof relPath !== 'string') return null;
     const parts = relPath.split('/').filter(Boolean);
@@ -195,6 +200,7 @@ export async function buildTeslaCamIndex(files, directoryName = null, onProgress
             });
         }
         const g = groups.get(groupId);
+        if (parsed.isGm) g.isGm = true;
         g.filesByCamera.set(parsed.camera, { file, relPath, tag, eventId, timestampKey: parsed.timestampKey, camera: parsed.camera });
 
         // try to infer folder label from relPath root if possible
@@ -300,11 +306,34 @@ export function buildDayCollections(groups) {
 
         // Custom folder clips (non-standard folder names)
         if (dayData.custom && dayData.custom.length > 0) {
-            const customGroups = dayData.custom.sort((a, b) => (a.timestampKey || '').localeCompare(b.timestampKey || ''));
-            const id = `custom:${day}`;
-            const coll = buildCollectionFromGroups(id, day, 'Custom', customGroups);
-            coll.isCustomStructure = true;
-            collections.set(id, coll);
+            // Separate GM Surround Vision clips from other custom clips
+            const gmGroups = dayData.custom.filter(g => g.isGm);
+            const nonGmGroups = dayData.custom.filter(g => !g.isGm);
+
+            // Non-GM custom clips → single collection (existing behaviour)
+            if (nonGmGroups.length > 0) {
+                const customGroups = nonGmGroups.sort((a, b) => (a.timestampKey || '').localeCompare(b.timestampKey || ''));
+                const id = `custom:${day}`;
+                const coll = buildCollectionFromGroups(id, day, 'Custom', customGroups);
+                coll.isCustomStructure = true;
+                collections.set(id, coll);
+            }
+
+            // GM clips → group into drives using the 5-minute segment algorithm
+            if (gmGroups.length > 0) {
+                const sortedGm = gmGroups.sort((a, b) => (a.timestampKey || '').localeCompare(b.timestampKey || ''));
+                const gmDrives = groupGmClipsByDrive(sortedGm);
+                dayData.gmDrives = [];
+                for (let idx = 0; idx < gmDrives.length; idx++) {
+                    const driveGroups = gmDrives[idx];
+                    const id = `gm_drive:${day}:${idx}`;
+                    const coll = buildCollectionFromGroups(id, day, 'GM Drive', driveGroups, GM_SEGMENT_MS);
+                    coll.isGmDrive = true;
+                    coll.driveIndex = idx;
+                    collections.set(id, coll);
+                    dayData.gmDrives.push(id);
+                }
+            }
         }
     }
 
@@ -315,10 +344,50 @@ export function buildDayCollections(groups) {
     };
 }
 
-function buildCollectionFromGroups(id, day, clipType, groups) {
+/**
+ * Group GM Surround Vision clip groups into logical drives.
+ *
+ * GM records in 5-minute segments. Consecutive segments with a ~5-minute gap
+ * between their start times belong to the same drive. Any gap that is NOT
+ * approximately 5 minutes (either too long = recording gap between drives, or
+ * too short = the previous segment was a short/partial clip that ended the
+ * current drive) causes a drive boundary.
+ *
+ * A standalone short segment (no neighbours within 5 minutes) is its own drive.
+ *
+ * @param {Object[]} sortedGroups - Clip groups sorted by timestampKey ascending, all isGm
+ * @returns {Object[][]} Array of drives; each drive is an array of clip groups
+ */
+function groupGmClipsByDrive(sortedGroups) {
+    if (sortedGroups.length === 0) return [];
+
+    const drives = [];
+    let currentDrive = [sortedGroups[0]];
+
+    for (let i = 1; i < sortedGroups.length; i++) {
+        const prevMs = parseTimestampKeyToEpochMs(sortedGroups[i - 1].timestampKey) ?? 0;
+        const currMs = parseTimestampKeyToEpochMs(sortedGroups[i].timestampKey) ?? 0;
+        const gap = currMs - prevMs;
+
+        // A gap within ±30 s of exactly 5 minutes = consecutive segments = same drive.
+        // Any other gap (short segment ended early, or long break between drives) = new drive.
+        const isConsecutive = Math.abs(gap - GM_SEGMENT_MS) <= GM_SEGMENT_TOLERANCE_MS;
+
+        if (isConsecutive) {
+            currentDrive.push(sortedGroups[i]);
+        } else {
+            drives.push(currentDrive);
+            currentDrive = [sortedGroups[i]];
+        }
+    }
+    drives.push(currentDrive);
+    return drives;
+}
+
+function buildCollectionFromGroups(id, day, clipType, groups, segmentDurationMs = 60_000) {
     const startEpochMs = parseTimestampKeyToEpochMs(groups[0]?.timestampKey) ?? 0;
     const lastStart = parseTimestampKeyToEpochMs(groups[groups.length - 1]?.timestampKey) ?? startEpochMs;
-    const endEpochMs = lastStart + 60_000;
+    const endEpochMs = lastStart + segmentDurationMs;
     const durationMs = Math.max(1, endEpochMs - startEpochMs);
 
     const segmentStartsMs = groups.map(g => {
@@ -334,6 +403,7 @@ function buildCollectionFromGroups(id, day, clipType, groups) {
         tag: clipType,
         groups,
         meta: null,
+        startEpochMs,
         durationMs,
         segmentStartsMs,
         anchorMs: 0,

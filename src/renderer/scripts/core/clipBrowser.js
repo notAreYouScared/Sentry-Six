@@ -109,13 +109,38 @@ export function renderClipList() {
         const customId = `custom:${selectedDay}`;
         const customColl = library.dayCollections?.get(customId);
         if (customColl) {
-            const folderName = dayData.custom[0]?.tag || 'Custom';
+            const folderName = dayData.custom.find(g => !g.isGm)?.tag || 'Custom';
             const item = createClipItem(customColl, `${folderName} Clips`, 'custom');
             clipList.appendChild(item);
         }
     }
-    
+
+    // 5. GM Surround Vision drives (one item per detected drive)
+    if (dayData.gmDrives && dayData.gmDrives.length > 0) {
+        for (let i = 0; i < dayData.gmDrives.length; i++) {
+            const driveCollId = dayData.gmDrives[i];
+            const coll = library.dayCollections?.get(driveCollId);
+            if (!coll) continue;
+            const startTime = formatEpochTimeHHMM(coll.startEpochMs);
+            const endTime = formatEpochTimeHHMM(coll.sortEpoch);
+            const driveLabel = `${t('ui.clipBrowser.gmDrive') || 'Drive'} ${i + 1} · ${startTime} – ${endTime}`;
+            const item = createClipItem(coll, driveLabel, 'gm-drive');
+            clipList.appendChild(item);
+        }
+    }
+
     highlightSelectedClip();
+}
+
+/**
+ * Format epoch ms as HH:MM (24-hour, zero-padded).
+ */
+function formatEpochTimeHHMM(ms) {
+    if (!ms) return '--:--';
+    const d = new Date(ms);
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
 }
 
 /**
@@ -163,7 +188,8 @@ export function createClipItem(coll, title, typeClass) {
     const subline = `${groups.length} ${segmentText} · ${Math.max(1, cameras.length)} cam`;
     const badgeClass = typeClass;
     const badgeLabel = typeClass.charAt(0).toUpperCase() + typeClass.slice(1);
-    
+    const titleClass = typeClass === 'gm-drive' ? 'clip-title clip-title--wrap' : 'clip-title';
+
     // Build reason badge for SavedClips only (as text, not icon)
     let reasonBadge = '';
     if (typeClass === 'saved' && eventMeta?.reason && formatEventReason) {
@@ -181,7 +207,7 @@ export function createClipItem(coll, title, typeClass) {
     
     item.innerHTML = `
         <div class="clip-meta clip-meta-full">
-            <div class="clip-title">${escapeHtml(title)}</div>
+            <div class="${titleClass}">${escapeHtml(title)}</div>
             <div class="clip-badges">
                 <span class="badge ${badgeClass}">${escapeHtml(badgeLabel)}</span>
                 ${reasonBadge}

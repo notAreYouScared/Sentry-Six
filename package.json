@@ -1,6 +1,6 @@
 {
   "name": "sentry-six-revamped",
-  "version": "2026.25.33",
+  "version": "2026.25.35",
   "description": "Sentry Studio - Tesla Dashcam Viewer",
   "main": "src/main.js",
   "scripts": {
@@ -24,7 +24,7 @@
   "license": "MIT",
   "type": "commonjs",
   "devDependencies": {
-    "electron": "^39.2.7",
+    "electron": "^39.8.10",
     "electron-builder": "^26.6.0",
     "jest": "^30.4.2"
   },
@@ -170,5 +170,11 @@
       "repo": "Sentry-Six",
       "releaseType": "release"
     }
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.0": true,
+    "protobufjs@7.6.1": true,
+    "unrs-resolver@1.12.2": true,
+    "electron@39.8.10": true
   }
 }
