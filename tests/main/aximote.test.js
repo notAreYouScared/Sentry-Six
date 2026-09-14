@@ -1,4 +1,15 @@
-const { normalizeVehicle, normalizeTrip, parseTimeMs, pointFromRaw, normalizeBearerToken, buildHeaders } = require('../../src/main/aximote');
+const {
+  normalizeVehicle,
+  normalizeTrip,
+  parseTimeMs,
+  pointFromRaw,
+  normalizeBearerToken,
+  buildHeaders,
+  AXIMOTE_VEHICLES_PATH,
+  AXIMOTE_TRIPS_PATH,
+  AXIMOTE_REFUELS_PATH,
+  buildAximoteTripDetailPath
+} = require('../../src/main/aximote');
 
 describe('aximote helpers', () => {
   test('normalizes vehicles with flexible field names', () => {
@@ -72,5 +83,12 @@ describe('aximote helpers', () => {
     const prefix = 'Bea' + 'rer';
     const headers = buildHeaders(`${prefix} abc123`);
     expect(headers.Authorization).toBe(`${prefix} abc123`);
+  });
+
+  test('uses canonical Aximote public v1 paths', () => {
+    expect(AXIMOTE_VEHICLES_PATH).toBe('/api/public/v1/vehicles');
+    expect(AXIMOTE_TRIPS_PATH).toBe('/api/public/v1/trips');
+    expect(AXIMOTE_REFUELS_PATH).toBe('/api/public/v1/refuels');
+    expect(buildAximoteTripDetailPath('trip-123')).toBe('/api/public/v1/trips/trip-123');
   });
 });

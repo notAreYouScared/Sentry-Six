@@ -1,6 +1,10 @@
 const https = require('https');
 
 const AXIMOTE_BASE_URL = 'https://api.aximote.com';
+const AXIMOTE_PUBLIC_V1_BASE = '/api/public/v1';
+const AXIMOTE_VEHICLES_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/vehicles`;
+const AXIMOTE_TRIPS_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/trips`;
+const AXIMOTE_REFUELS_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/refuels`;
 const REQUEST_TIMEOUT_MS = 20_000;
 
 function buildHeaders(token) {
@@ -211,6 +215,10 @@ async function queryAximote(paths, headers) {
   return { ok: false, error: lastError || new Error('Aximote request failed') };
 }
 
+function buildAximoteTripDetailPath(tripId) {
+  return `${AXIMOTE_TRIPS_PATH}/${encodeURIComponent(String(tripId || '').trim())}`;
+}
+
 function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage } = {}) {
   function saveTokenSecure(token) {
     const settings = typeof loadSettings === 'function' ? loadSettings() : {};
@@ -269,7 +277,7 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
       if (!headers) return { success: false, error: 'Missing Personal Access Token' };
 
       const response = await queryAximote(
-        ['/vehicles', '/api/vehicles', '/v1/vehicles', '/v2/vehicles'],
+        [AXIMOTE_VEHICLES_PATH],
         headers
       );
       if (!response.ok) return { success: false, error: response.error?.message || 'Failed to load vehicles' };
@@ -298,12 +306,7 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
 
       const response = await queryAximote(
         [
-          `/vehicles/${encodeURIComponent(id)}/trips`,
-          `/api/vehicles/${encodeURIComponent(id)}/trips`,
-          `/v1/vehicles/${encodeURIComponent(id)}/trips`,
-          `/trips?vehicleId=${encodeURIComponent(id)}`,
-          `/api/trips?vehicleId=${encodeURIComponent(id)}`,
-          `/v1/trips?vehicleId=${encodeURIComponent(id)}`
+          `${AXIMOTE_TRIPS_PATH}?vehicleId=${encodeURIComponent(id)}`
         ],
         headers
       );
@@ -322,6 +325,10 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
 }
 
 module.exports = {
+  AXIMOTE_VEHICLES_PATH,
+  AXIMOTE_TRIPS_PATH,
+  AXIMOTE_REFUELS_PATH,
+  buildAximoteTripDetailPath,
   registerAximoteIpc,
   buildHeaders,
   normalizeBearerToken,
