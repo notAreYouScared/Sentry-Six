@@ -38,6 +38,38 @@ function requestJson(url, headers, { method = 'GET', jsonBody = null } = {}) {
       reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr);
     }
 
+    function requestText(url, headers, { method = 'GET', jsonBody = null } = {}) {
+      return new Promise((resolve, reject) => {
+        const reqHeaders = { ...(headers || {}) };
+        let bodyStr = null;
+        if (jsonBody !== null && jsonBody !== undefined) {
+          bodyStr = JSON.stringify(jsonBody);
+          reqHeaders['Content-Type'] = 'application/json';
+          reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr);
+        }
+
+        const req = https.request(url, { method, headers: reqHeaders, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+          let body = '';
+          res.on('data', (chunk) => { body += chunk.toString('utf8'); });
+          res.on('end', () => {
+            const status = res.statusCode || 0;
+            if (status >= 400) {
+              const err = new Error(`HTTP ${status}`);
+              err.status = status;
+              err.body = body.slice(0, 300);
+              reject(err);
+              return;
+            }
+            resolve(body);
+          });
+        });
+        req.on('timeout', () => req.destroy(new Error('Request timed out')));
+        req.on('error', reject);
+        if (bodyStr) req.write(bodyStr);
+        req.end();
+      });
+    }
+
     const req = https.request(url, { method, headers: reqHeaders, timeout: REQUEST_TIMEOUT_MS }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk.toString('utf8'); });
@@ -282,6 +314,31 @@ function extractPointsFromTripGeoJson(payload, tripId) {
   }).filter(Boolean);
 }
 
+function extractPointsFromTripGpx(gpxText) {
+  if (typeof gpxText !== 'string' || !gpxText.trim()) return [];
+  const points = [];
+  const trkptRe = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/gi;
+  let match;
+  while ((match = trkptRe.exec(gpxText)) !== null) {
+    const attrs = match[1] || '';
+    const body = match[2] || '';
+    const lat = asNumber((attrs.match(/\blat\s*=\s*["']([^"']+)["']/i) || [])[1]);
+    const lon = asNumber((attrs.match(/\blon\s*=\s*["']([^"']+)["']/i) || [])[1]);
+    if (lat === null || lon === null) continue;
+    const timeValue = ((body.match(/<time>\s*([^<]+)\s*<\/time>/i) || [])[1] || '').trim();
+    const heading = asNumber(((body.match(/<(?:course|bearing|cog|gpxtpx:course)>\s*([^<]+)\s*<\/(?:course|bearing|cog|gpxtpx:course)>/i) || [])[1])) ?? 0;
+    const speedMps = asNumber(((body.match(/<(?:speed|gpxtpx:speed)>\s*([^<]+)\s*<\/(?:speed|gpxtpx:speed)>/i) || [])[1])) ?? 0;
+    points.push({
+      lat,
+      lon,
+      heading,
+      speedMps,
+      timestampMs: parseTimeMs(timeValue) ?? 0
+    });
+  }
+  return points;
+}
+
 function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage } = {}) {
   function saveTokenSecure(token) {
     const settings = typeof loadSettings === 'function' ? loadSettings() : {};
@@ -415,6 +472,17 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
           if (geoPoints.length > 0) trip.points = geoPoints;
         } catch {}
       }
+      if (!Array.isArray(trip.points) || trip.points.length < 2) {
+        try {
+          const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GPX_PATH, AXIMOTE_BASE_URL);
+          const gpxText = await requestText(exportUrl, headers, {
+            method: 'POST',
+            jsonBody: { tripIds: [id] }
+          });
+          const gpxPoints = extractPointsFromTripGpx(gpxText);
+          if (gpxPoints.length > 0) trip.points = gpxPoints;
+        } catch {}
+      }
       return { success: true, trip };
     } catch (err) {
       return { success: false, error: err?.message || String(err) };
@@ -430,6 +498,7 @@ module.exports = {
   AXIMOTE_TRIPS_EXPORT_GPX_PATH,
   buildAximoteTripDetailPath,
   extractPointsFromTripGeoJson,
+  extractPointsFromTripGpx,
   registerAximoteIpc,
   buildHeaders,
   normalizeBearerToken,

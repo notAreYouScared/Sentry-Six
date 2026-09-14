@@ -11,7 +11,8 @@ const {
   AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH,
   AXIMOTE_TRIPS_EXPORT_GPX_PATH,
   buildAximoteTripDetailPath,
-  extractPointsFromTripGeoJson
+  extractPointsFromTripGeoJson,
+  extractPointsFromTripGpx
 } = require('../../src/main/aximote');
 
 describe('aximote helpers', () => {
@@ -133,5 +134,26 @@ describe('aximote helpers', () => {
     expect(points.length).toBe(2);
     expect(points[0].lat).toBeCloseTo(42.5);
     expect(points[0].lon).toBeCloseTo(-83.02);
+  });
+
+  test('extracts trip points from gpx export', () => {
+    const gpx = `<?xml version="1.0"?>
+<gpx>
+  <trk><trkseg>
+    <trkpt lat="42.5000" lon="-83.0200"><time>2026-09-14T15:00:00Z</time><course>90</course><speed>12.5</speed></trkpt>
+    <trkpt lat="42.5100" lon="-83.0300"><time>2026-09-14T15:01:00Z</time></trkpt>
+  </trkseg></trk>
+</gpx>`;
+    const points = extractPointsFromTripGpx(gpx);
+    expect(points.length).toBe(2);
+    expect(points[0]).toEqual({
+      lat: 42.5,
+      lon: -83.02,
+      heading: 90,
+      speedMps: 12.5,
+      timestampMs: 1789398000000
+    });
+    expect(points[1].lat).toBeCloseTo(42.51);
+    expect(points[1].heading).toBe(0);
   });
 });
