@@ -149,8 +149,6 @@ function createDriveItem(drive, hasClips, useMetric) {
     const accelChip = showStats && drive.accelPushCount > 0
         ? `<span class="drive-chip drive-chip--slate" title="Accelerator overrides while FSD active"><span class="material-symbols-outlined">bolt</span>${drive.accelPushCount}</span>`
         : '';
-    const batteryChip = formatBatteryChip(drive);
-
     const tagPills = (drive.tags ?? []).map(tag =>
         `<span class="tag-pill">${escapeHtml(tag)}</span>`
     ).join('');
@@ -176,7 +174,7 @@ function createDriveItem(drive, hasClips, useMetric) {
         <div class="drive-chips">
             <span class="drive-chip"><span class="material-symbols-outlined">straighten</span>${escapeHtml(distanceStr)}</span>
             <span class="drive-chip"><span class="material-symbols-outlined">schedule</span>${escapeHtml(durStr)}</span>
-            ${fsdChip}${footageChip}${accelChip}${batteryChip}
+            ${fsdChip}${footageChip}${accelChip}
         </div>
         ${tagsRow}
     `;
@@ -194,17 +192,6 @@ function createDriveItem(drive, hasClips, useMetric) {
     observeForGeocoding(item);
 
     return item;
-}
-
-function formatBatteryChip(drive) {
-    const start = Number(drive?.startBatteryPct);
-    const end = Number(drive?.endBatteryPct);
-    const hasStart = Number.isFinite(start);
-    const hasEnd = Number.isFinite(end);
-    if (!hasStart && !hasEnd) return '';
-    const startText = hasStart ? `${Math.round(start)}%` : '—';
-    const endText = hasEnd ? `${Math.round(end)}%` : '—';
-    return `<span class="drive-chip drive-chip--slate" title="Trip battery state of charge"><span class="material-symbols-outlined">battery_full</span>${startText} → ${endText}</span>`;
 }
 
 /** Duration in Sentry Drive's list format: "17 min" or "1h 2m". */

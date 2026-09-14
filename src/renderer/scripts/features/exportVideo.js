@@ -1981,6 +1981,20 @@ export async function startExport() {
         closeBtn.title = t('ui.supportChat.minimize') || 'Minimize';
     }
 
+    // Fallback map path for Aximote-backed collections (no SEI GPS available).
+    const fallbackDriveMapPath = (() => {
+        const drivePath = state.collection.active?.driveMapPath;
+        if (!Array.isArray(drivePath) || drivePath.length < 2) return [];
+        return drivePath
+            .map(p => {
+                const lat = Number(p?.lat);
+                const lon = Number(p?.lon);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+                return [lat, lon];
+            })
+            .filter(Boolean);
+    })();
+
     // Only extract SEI data if dashboard or minimap is enabled - skip entirely if both disabled to save RAM
     // Extract SEI data one segment at a time to avoid loading all files into memory simultaneously
     // This happens AFTER file dialog so user gets instant feedback
@@ -2118,26 +2132,29 @@ export async function startExport() {
                 if (includeDashboard) {
                     notify(t('ui.notifications.noTelemetryData'), { type: 'warn' });
                 }
-                if (includeMinimap && allMapPath.length === 0) {
+                if (includeMinimap && allMapPath.length === 0 && fallbackDriveMapPath.length === 0) {
                     notify(t('ui.export.minimapNoGpsDisabled'), { type: 'warn' });
                 }
                 seiData = null;
-                mapPath = [];
+                mapPath = fallbackDriveMapPath;
             }
         } catch (err) {
             if (includeDashboard) {
                 notify(t('ui.notifications.failedToExtractTelemetry'), { type: 'warn' });
             }
-            if (includeMinimap) {
+            if (includeMinimap && fallbackDriveMapPath.length === 0) {
                 notify(t('ui.export.minimapGpsExtractFailed'), { type: 'warn' });
             }
             seiData = null;
-            mapPath = [];
+            mapPath = fallbackDriveMapPath;
         }
 
         // Reset progress bar after SEI extraction before FFmpeg phase
         if (exportProgressBar) exportProgressBar.style.width = '0%';
         if (progressText) progressText.textContent = t('ui.export.preparing') || 'Preparing...';
+    }
+    if (includeMinimap && mapPath.length === 0 && fallbackDriveMapPath.length > 0) {
+        mapPath = fallbackDriveMapPath;
     }
     // If dashboard and minimap are both disabled, seiData remains null and no files are loaded into memory
 

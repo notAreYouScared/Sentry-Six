@@ -137,7 +137,11 @@ export function updateMapVisibility() {
     const state = getState?.();
 
     if (!mapVis) return;
-    const enabled = !!state?.ui?.mapEnabled && !state?.ui?.telemetryUnavailable;
+    const hasAximoteRoute =
+        state?.collection?.active?.isAximoteTrip === true &&
+        Array.isArray(state?.collection?.active?.driveMapPath) &&
+        state.collection.active.driveMapPath.length > 1;
+    const enabled = !!state?.ui?.mapEnabled && (!state?.ui?.telemetryUnavailable || hasAximoteRoute);
     mapVis.classList.toggle('user-hidden', !enabled);
 
     if (enabled && map) {
