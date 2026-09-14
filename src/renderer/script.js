@@ -1568,12 +1568,16 @@ async function selectDriveCollection(drive) {
 
     const driveKeys = new Set(routeKeys);
     const neededDateSet = new Set(neededDates);
+    const fallbackStartMs = Number(drive.startMs) - 5 * 60_000;
+    const fallbackEndMs = Number(drive.endMs) + 5 * 60_000;
     const matchingGroups = library.clipGroups
         .filter(g => {
             if (!g.timestampKey) return false;
             if (driveKeys.size > 0) return driveKeys.has(g.timestampKey);
             const datePart = g.timestampKey.split('_')[0];
-            return neededDateSet.has(datePart);
+            if (!neededDateSet.has(datePart)) return false;
+            const ts = parseTimestampKeyToEpochMs(g.timestampKey);
+            return Number.isFinite(ts) && ts >= fallbackStartMs && ts <= fallbackEndMs;
         })
         .sort((a, b) => (a.timestampKey || '').localeCompare(b.timestampKey || ''));
 
@@ -1916,6 +1920,10 @@ async function loadSentryUsbData(filePath) {
  */
 function clearSentryUsbData() {
     const sentryUsb = state.sentryUsb;
+    for (const drive of sentryUsb.drives || []) {
+        drive.routeTimestampKeys = [];
+        drive.clipCount = 0;
+    }
     sentryUsb.drives = [];
     sentryUsb.hasFootage = new Set();
     sentryUsb.loaded = false;
@@ -2031,7 +2039,7 @@ async function loadAximoteTripsOnStartup() {
         return;
     }
     if (state.sentryUsb.loaded || state.sentryUsb.dataPath) return;
-    if (!window.electronAPI?.getSetting) return;
+    if (!window.electronAPI?.getSetting || !window.electronAPI?.aximoteIsConfigured) return;
     const [savedSentryPath, configured, vehicleId] = await Promise.all([
         window.electronAPI.getSetting('sentryUsbDataPath'),
         window.electronAPI.aximoteIsConfigured?.(),
