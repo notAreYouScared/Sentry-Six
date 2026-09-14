@@ -12,7 +12,8 @@ const {
   AXIMOTE_TRIPS_EXPORT_GPX_PATH,
   buildAximoteTripDetailPath,
   extractPointsFromTripGeoJson,
-  extractPointsFromTripGpx
+  extractPointsFromTripGpx,
+  hasTimedRoutePoints
 } = require('../../src/main/aximote');
 
 describe('aximote helpers', () => {
@@ -155,5 +156,11 @@ describe('aximote helpers', () => {
     });
     expect(points[1].lat).toBeCloseTo(42.51);
     expect(points[1].heading).toBe(0);
+  });
+
+  test('detects timed route points correctly', () => {
+    expect(hasTimedRoutePoints([{ lat: 1, lon: 2, timestampMs: 0 }, { lat: 2, lon: 3, timestampMs: 0 }])).toBe(false);
+    expect(hasTimedRoutePoints([{ lat: 1, lon: 2, timestampMs: 1000 }, { lat: 2, lon: 3, timestampMs: 1000 }])).toBe(false);
+    expect(hasTimedRoutePoints([{ lat: 1, lon: 2, timestampMs: 1000 }, { lat: 2, lon: 3, timestampMs: 2000 }])).toBe(true);
   });
 });

@@ -1537,7 +1537,15 @@ function refreshFsdEventMarkers() {
  * calendar dates the drive spans and combining their clip groups.
  */
 async function selectDriveCollection(drive) {
-    if (drive?.source === 'aximote' && (!Array.isArray(drive.pathPoints) || drive.pathPoints.length === 0)) {
+    const hasAximoteTimedPath = Array.isArray(drive?.pathPoints) &&
+        drive.pathPoints.length > 1 &&
+        drive.pathPoints.some((point, index, arr) => {
+            if (index === 0) return false;
+            const prevTs = Number(arr[index - 1]?.timestampMs);
+            const ts = Number(point?.timestampMs);
+            return Number.isFinite(prevTs) && Number.isFinite(ts) && ts > prevTs && ts > 0;
+        });
+    if (drive?.source === 'aximote' && !hasAximoteTimedPath) {
         const tripId = String(drive.aximoteTripId || '').trim();
         if (tripId && window.electronAPI?.aximoteGetTrip) {
             try {

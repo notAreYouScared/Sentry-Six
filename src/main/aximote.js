@@ -339,6 +339,18 @@ function extractPointsFromTripGpx(gpxText) {
   return points;
 }
 
+function hasTimedRoutePoints(points) {
+  if (!Array.isArray(points) || points.length < 2) return false;
+  let prev = null;
+  for (const point of points) {
+    const ts = asNumber(point?.timestampMs);
+    if (ts === null || ts <= 0) continue;
+    if (prev !== null && ts > prev) return true;
+    prev = ts;
+  }
+  return false;
+}
+
 function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage } = {}) {
   function saveTokenSecure(token) {
     const settings = typeof loadSettings === 'function' ? loadSettings() : {};
@@ -461,6 +473,17 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
 
       const trip = normalizeTrip(response.payload, 0);
       if (!trip) return { success: false, error: 'Trip details were missing required time fields' };
+      if (!hasTimedRoutePoints(trip.points)) {
+        try {
+          const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GPX_PATH, AXIMOTE_BASE_URL);
+          const gpxText = await requestText(exportUrl, headers, {
+            method: 'POST',
+            jsonBody: { tripIds: [id] }
+          });
+          const gpxPoints = extractPointsFromTripGpx(gpxText);
+          if (gpxPoints.length > 1) trip.points = gpxPoints;
+        } catch {}
+      }
       if (!Array.isArray(trip.points) || trip.points.length < 2) {
         try {
           const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH, AXIMOTE_BASE_URL);
@@ -470,17 +493,6 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
           });
           const geoPoints = extractPointsFromTripGeoJson(geojson, id);
           if (geoPoints.length > 0) trip.points = geoPoints;
-        } catch {}
-      }
-      if (!Array.isArray(trip.points) || trip.points.length < 2) {
-        try {
-          const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GPX_PATH, AXIMOTE_BASE_URL);
-          const gpxText = await requestText(exportUrl, headers, {
-            method: 'POST',
-            jsonBody: { tripIds: [id] }
-          });
-          const gpxPoints = extractPointsFromTripGpx(gpxText);
-          if (gpxPoints.length > 0) trip.points = gpxPoints;
         } catch {}
       }
       return { success: true, trip };
@@ -499,6 +511,7 @@ module.exports = {
   buildAximoteTripDetailPath,
   extractPointsFromTripGeoJson,
   extractPointsFromTripGpx,
+  hasTimedRoutePoints,
   registerAximoteIpc,
   buildHeaders,
   normalizeBearerToken,
