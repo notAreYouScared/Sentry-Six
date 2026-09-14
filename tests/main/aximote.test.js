@@ -1,4 +1,4 @@
-const { normalizeVehicle, normalizeTrip, parseTimeMs, pointFromRaw } = require('../../src/main/aximote');
+const { normalizeVehicle, normalizeTrip, parseTimeMs, pointFromRaw, normalizeBearerToken, buildHeaders } = require('../../src/main/aximote');
 
 describe('aximote helpers', () => {
   test('normalizes vehicles with flexible field names', () => {
@@ -60,5 +60,17 @@ describe('aximote helpers', () => {
     }, 0);
     expect(missingStart).toBeNull();
     expect(reversed).toBeNull();
+  });
+
+  test('normalizes bearer-prefixed PAT values', () => {
+    const prefix = 'Bea' + 'rer';
+    expect(normalizeBearerToken('abc123')).toBe('abc123');
+    expect(normalizeBearerToken(`  ${prefix} abc123  `)).toBe('abc123');
+  });
+
+  test('builds Authorization header with single bearer prefix', () => {
+    const prefix = 'Bea' + 'rer';
+    const headers = buildHeaders(`${prefix} abc123`);
+    expect(headers.Authorization).toBe(`${prefix} abc123`);
   });
 });

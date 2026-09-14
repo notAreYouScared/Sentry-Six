@@ -4,7 +4,7 @@ const AXIMOTE_BASE_URL = 'https://api.aximote.com';
 const REQUEST_TIMEOUT_MS = 20_000;
 
 function buildHeaders(token) {
-  const trimmed = String(token || '').trim();
+  const trimmed = normalizeBearerToken(token);
   if (!trimmed) return null;
   return {
     Accept: 'application/json',
@@ -13,6 +13,13 @@ function buildHeaders(token) {
     'Personal-Access-Token': trimmed,
     'User-Agent': 'Sentry-Studio/aximote-integration'
   };
+}
+
+function normalizeBearerToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw) return '';
+  const m = raw.match(/^Bearer\s+(.+)$/i);
+  return m ? String(m[1] || '').trim() : raw;
 }
 
 function requestJson(url, headers) {
@@ -316,6 +323,8 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
 
 module.exports = {
   registerAximoteIpc,
+  buildHeaders,
+  normalizeBearerToken,
   normalizeVehicle,
   normalizeTrip,
   pointFromRaw,
