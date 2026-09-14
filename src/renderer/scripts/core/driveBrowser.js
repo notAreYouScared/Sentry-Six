@@ -57,7 +57,7 @@ export function renderDriveList() {
                     <rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M6 14h.01M10 10h4M10 14h4"/>
                 </svg>
                 <p class="drive-no-data-title">No drive data loaded</p>
-                <p class="drive-no-data-desc">SentryUSB Drive Data shows your full driving history with GPS routes, speed, and FSD stats. Requires a SentryUSB <code>drive-data.json</code> file.</p>
+                <p class="drive-no-data-desc">Load drive history from SentryUSB (<code>drive-data.json</code>) or sync trips from Aximote to match footage and map routes.</p>
                 <button class="btn btn-secondary btn-small drive-select-file-btn" onclick="document.getElementById('browseDriveDataFileBtn')?.click()">Select drive-data.json</button>
                 <a href="https://sentry-six.com/sentry-usb" target="_blank" class="drive-learn-more-link">Learn more about SentryUSB</a>
             </div>`;
@@ -149,7 +149,6 @@ function createDriveItem(drive, hasClips, useMetric) {
     const accelChip = showStats && drive.accelPushCount > 0
         ? `<span class="drive-chip drive-chip--slate" title="Accelerator overrides while FSD active"><span class="material-symbols-outlined">bolt</span>${drive.accelPushCount}</span>`
         : '';
-
     const tagPills = (drive.tags ?? []).map(tag =>
         `<span class="tag-pill">${escapeHtml(tag)}</span>`
     ).join('');

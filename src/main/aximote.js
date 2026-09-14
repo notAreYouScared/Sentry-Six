@@ -1,0 +1,529 @@
+const https = require('https');
+
+const AXIMOTE_BASE_URL = 'https://api.aximote.com';
+const AXIMOTE_PUBLIC_V1_BASE = '/api/public/v1';
+const AXIMOTE_VEHICLES_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/vehicles`;
+const AXIMOTE_TRIPS_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/trips`;
+const AXIMOTE_REFUELS_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/refuels`;
+const AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH = `${AXIMOTE_TRIPS_PATH}/export/geojson`;
+const AXIMOTE_TRIPS_EXPORT_GPX_PATH = `${AXIMOTE_TRIPS_PATH}/export/gpx`;
+const REQUEST_TIMEOUT_MS = 20_000;
+
+function buildHeaders(token) {
+  const trimmed = normalizeBearerToken(token);
+  if (!trimmed) return null;
+  return {
+    Accept: 'application/json',
+    Authorization: 'Bearer ' + trimmed,
+    'X-API-Key': trimmed,
+    'Personal-Access-Token': trimmed,
+    'User-Agent': 'Sentry-Studio/aximote-integration'
+  };
+}
+
+function normalizeBearerToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw) return '';
+  const m = raw.match(/^Bearer\s+(.+)$/i);
+  return m ? String(m[1] || '').trim() : raw;
+}
+
+function requestJson(url, headers, { method = 'GET', jsonBody = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const reqHeaders = { ...(headers || {}) };
+    let bodyStr = null;
+    if (jsonBody !== null && jsonBody !== undefined) {
+      bodyStr = JSON.stringify(jsonBody);
+      reqHeaders['Content-Type'] = 'application/json';
+      reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr);
+    }
+
+    function requestText(url, headers, { method = 'GET', jsonBody = null } = {}) {
+      return new Promise((resolve, reject) => {
+        const reqHeaders = { ...(headers || {}) };
+        let bodyStr = null;
+        if (jsonBody !== null && jsonBody !== undefined) {
+          bodyStr = JSON.stringify(jsonBody);
+          reqHeaders['Content-Type'] = 'application/json';
+          reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr);
+        }
+
+        const req = https.request(url, { method, headers: reqHeaders, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+          let body = '';
+          res.on('data', (chunk) => { body += chunk.toString('utf8'); });
+          res.on('end', () => {
+            const status = res.statusCode || 0;
+            if (status >= 400) {
+              const err = new Error(`HTTP ${status}`);
+              err.status = status;
+              err.body = body.slice(0, 300);
+              reject(err);
+              return;
+            }
+            resolve(body);
+          });
+        });
+        req.on('timeout', () => req.destroy(new Error('Request timed out')));
+        req.on('error', reject);
+        if (bodyStr) req.write(bodyStr);
+        req.end();
+      });
+    }
+
+    const req = https.request(url, { method, headers: reqHeaders, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk.toString('utf8'); });
+      res.on('end', () => {
+        const status = res.statusCode || 0;
+        if (status >= 400) {
+          const err = new Error(`HTTP ${status}`);
+          err.status = status;
+          err.body = body.slice(0, 300);
+          reject(err);
+          return;
+        }
+        try {
+          const parsed = body ? JSON.parse(body) : null;
+          resolve(parsed);
+        } catch (err) {
+          reject(new Error('Invalid JSON response'));
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('Request timed out')));
+    req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+function extractArray(payload, candidateKeys = []) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+
+  for (const key of candidateKeys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.results)) return payload.results;
+  if (Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
+function asNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function asPercent(value) {
+  const num = asNumber(value);
+  if (num === null) return null;
+  return Math.max(0, Math.min(100, num));
+}
+
+function parseTimeMs(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    if (value > 1e11) return Math.round(value);
+    if (value > 1e9) return Math.round(value * 1000);
+    return Math.round(value * 1000);
+  }
+  const n = asNumber(value);
+  if (n !== null) return parseTimeMs(n);
+  const ts = Date.parse(String(value));
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function pointFromRaw(raw) {
+  if (Array.isArray(raw) && raw.length >= 2) {
+    const lat = asNumber(raw[0]);
+    const lon = asNumber(raw[1]);
+    if (lat === null || lon === null) return null;
+    const heading = asNumber(raw[2]) ?? 0;
+    const speedMps = asNumber(raw[3]) ?? 0;
+    const timestampMs = parseTimeMs(raw[4]) ?? 0;
+    return { lat, lon, heading, speedMps, timestampMs };
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const lat = asNumber(raw.lat ?? raw.latitude ?? raw.latitudeDeg ?? raw.latitude_deg ?? raw.y);
+  const lon = asNumber(raw.lng ?? raw.lon ?? raw.longitude ?? raw.longitudeDeg ?? raw.longitude_deg ?? raw.x);
+  if (lat === null || lon === null) return null;
+  const heading = asNumber(raw.heading ?? raw.headingDeg ?? raw.bearing ?? raw.course) ?? 0;
+  const speedMps = asNumber(raw.speedMps ?? raw.speed_mps ?? raw.speed ?? raw.velocity) ?? 0;
+  const timestampMs = parseTimeMs(raw.timestamp ?? raw.time ?? raw.ts ?? raw.recordedAt ?? raw.recorded_at) ?? 0;
+  return { lat, lon, heading, speedMps, timestampMs };
+}
+
+function normalizeVehicle(vehicle, idx) {
+  const idValue =
+    vehicle?.id ??
+    vehicle?.vehicleId ??
+    vehicle?.vehicle_id ??
+    vehicle?.uuid ??
+    vehicle?.vin;
+  const id = idValue !== undefined && idValue !== null ? String(idValue) : `vehicle-${idx + 1}`;
+
+  const label =
+    vehicle?.name ??
+    vehicle?.displayName ??
+    vehicle?.display_name ??
+    vehicle?.model ??
+    vehicle?.vin ??
+    `Vehicle ${idx + 1}`;
+
+  return { id, label: String(label) };
+}
+
+function normalizeTrip(trip, idx) {
+  const startMs = parseTimeMs(
+    trip?.startTime ??
+    trip?.startedAt ??
+    trip?.started_at ??
+    trip?.startDate ??
+    trip?.start_date ??
+    trip?.beginTime
+  );
+  const endMsRaw = parseTimeMs(
+    trip?.endTime ??
+    trip?.endedAt ??
+    trip?.ended_at ??
+    trip?.endDate ??
+    trip?.end_date ??
+    trip?.finishTime
+  );
+
+  const durationMinutes = asNumber(trip?.durationMinutes);
+  const durationSeconds =
+    asNumber(trip?.durationSec ?? trip?.durationSeconds ?? trip?.duration_seconds) ??
+    (durationMinutes !== null ? durationMinutes * 60 : null);
+  const durationMsRaw =
+    asNumber(trip?.durationMs ?? trip?.duration_ms) ??
+    (durationSeconds !== null ? durationSeconds * 1000 : null);
+
+  const endMs = endMsRaw ?? (startMs !== null && Number.isFinite(durationMsRaw) ? startMs + durationMsRaw : null);
+  if (startMs === null || endMs === null || endMs <= startMs) return null;
+
+  const pointArrays = [
+    trip?.gpsPath,
+    trip?.gps_path,
+    trip?.routePoints,
+    trip?.route_points,
+    trip?.path,
+    trip?.coordinates,
+    trip?.route?.points,
+    trip?.route?.coordinates
+  ];
+
+  let pointsRaw = [];
+  for (const candidate of pointArrays) {
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      pointsRaw = candidate;
+      break;
+    }
+  }
+
+  const points = pointsRaw.map(pointFromRaw).filter(Boolean);
+  if (points.length === 0) {
+    const startPoint = pointFromRaw(trip?.startLocation ?? trip?.start_location);
+    const endPoint = pointFromRaw(trip?.endLocation ?? trip?.end_location);
+    if (startPoint) points.push(startPoint);
+    if (endPoint) points.push(endPoint);
+  }
+
+  const distanceKmRaw = asNumber(trip?.distanceKm ?? trip?.distance_km);
+  const distanceMetersRaw = asNumber(trip?.distanceMeters ?? trip?.distance_meters ?? trip?.distance);
+  const distanceMilesRaw = asNumber(trip?.distanceMiles ?? trip?.distance_miles ?? trip?.miles);
+  const distanceKm =
+    distanceKmRaw ??
+    (distanceMetersRaw !== null ? distanceMetersRaw / 1000 : null) ??
+    (distanceMilesRaw !== null ? distanceMilesRaw * 1.60934 : null) ??
+    0;
+
+  const startBatteryPct = asPercent(
+    trip?.startBatteryPct ??
+    trip?.startBatteryPercent ??
+    trip?.startBatteryLevel ??
+    trip?.startBatteryLevelPct ??
+    trip?.startStateOfChargePct ??
+    trip?.startStateOfCharge ??
+    trip?.startSoc ??
+    trip?.startSOC
+  );
+  const endBatteryPct = asPercent(
+    trip?.endBatteryPct ??
+    trip?.endBatteryPercent ??
+    trip?.endBatteryLevel ??
+    trip?.endBatteryLevelPct ??
+    trip?.endStateOfChargePct ??
+    trip?.endStateOfCharge ??
+    trip?.endSoc ??
+    trip?.endSOC
+  );
+
+  return {
+    id: String(
+      trip?.id ??
+      trip?.tripId ??
+      trip?.trip_id ??
+      trip?.uuid ??
+      `trip-${idx + 1}`
+    ),
+    vehicleId: trip?.vehicleId ?? trip?.vehicle_id ?? null,
+    startMs,
+    endMs,
+    durationMs: endMs - startMs,
+    distanceKm: Number.isFinite(distanceKm) ? Math.max(0, distanceKm) : 0,
+    startBatteryPct,
+    endBatteryPct,
+    points
+  };
+}
+
+async function queryAximote(paths, headers) {
+  let lastError = null;
+  for (const p of paths) {
+    try {
+      const url = new URL(p, AXIMOTE_BASE_URL);
+      const payload = await requestJson(url, headers);
+      return { ok: true, payload };
+    } catch (err) {
+      lastError = err;
+      if (err?.status === 401 || err?.status === 403) break;
+    }
+  }
+  return { ok: false, error: lastError || new Error('Aximote request failed') };
+}
+
+function buildAximoteTripDetailPath(tripId) {
+  return `${AXIMOTE_TRIPS_PATH}/${encodeURIComponent(String(tripId || '').trim())}`;
+}
+
+function extractPointsFromTripGeoJson(payload, tripId) {
+  const rows = Array.isArray(payload?.features) ? payload.features : [];
+  const targetId = String(tripId || '');
+  let feature = rows.find(f => String(f?.id || f?.properties?.id || '') === targetId);
+  if (!feature && rows.length > 0) feature = rows[0];
+  const coords = Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates : [];
+  return coords.map((c) => {
+    if (!Array.isArray(c) || c.length < 2) return null;
+    const lon = asNumber(c[0]);
+    const lat = asNumber(c[1]);
+    if (lat === null || lon === null) return null;
+    return { lat, lon, heading: 0, speedMps: 0, timestampMs: 0 };
+  }).filter(Boolean);
+}
+
+function extractPointsFromTripGpx(gpxText) {
+  if (typeof gpxText !== 'string' || !gpxText.trim()) return [];
+  const points = [];
+  const trkptRe = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/gi;
+  let match;
+  while ((match = trkptRe.exec(gpxText)) !== null) {
+    const attrs = match[1] || '';
+    const body = match[2] || '';
+    const lat = asNumber((attrs.match(/\blat\s*=\s*["']([^"']+)["']/i) || [])[1]);
+    const lon = asNumber((attrs.match(/\blon\s*=\s*["']([^"']+)["']/i) || [])[1]);
+    if (lat === null || lon === null) continue;
+    const timeValue = ((body.match(/<time>\s*([^<]+)\s*<\/time>/i) || [])[1] || '').trim();
+    const heading = asNumber(((body.match(/<(?:course|bearing|cog|gpxtpx:course)>\s*([^<]+)\s*<\/(?:course|bearing|cog|gpxtpx:course)>/i) || [])[1])) ?? 0;
+    const speedMps = asNumber(((body.match(/<(?:speed|gpxtpx:speed)>\s*([^<]+)\s*<\/(?:speed|gpxtpx:speed)>/i) || [])[1])) ?? 0;
+    points.push({
+      lat,
+      lon,
+      heading,
+      speedMps,
+      timestampMs: parseTimeMs(timeValue) ?? 0
+    });
+  }
+  return points;
+}
+
+function hasTimedRoutePoints(points) {
+  if (!Array.isArray(points) || points.length < 2) return false;
+  let prev = null;
+  for (const point of points) {
+    const ts = asNumber(point?.timestampMs);
+    if (ts === null || ts <= 0) continue;
+    if (prev !== null && ts > prev) return true;
+    prev = ts;
+  }
+  return false;
+}
+
+function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage } = {}) {
+  function saveTokenSecure(token) {
+    const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+    const trimmed = String(token || '').trim();
+    if (!trimmed) {
+      delete settings.aximotePatEncrypted;
+      delete settings.aximotePat;
+      if (typeof saveSettings === 'function') saveSettings(settings);
+      return true;
+    }
+
+    if (!safeStorage?.isEncryptionAvailable?.()) return false;
+    const enc = safeStorage.encryptString(trimmed);
+    settings.aximotePatEncrypted = enc.toString('base64');
+    delete settings.aximotePat;
+    if (typeof saveSettings === 'function') saveSettings(settings);
+    return true;
+  }
+
+  function readTokenSecure() {
+    const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+    const encrypted = settings?.aximotePatEncrypted;
+    if (typeof encrypted === 'string' && encrypted.length > 0 && safeStorage?.isEncryptionAvailable?.()) {
+      try {
+        return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+      } catch {
+        return null;
+      }
+    }
+    return typeof settings?.aximotePat === 'string' ? settings.aximotePat : null;
+  }
+
+  ipcMain.handle('aximote:isConfigured', async () => {
+    const token = readTokenSecure();
+    return !!(token && String(token).trim().length > 0);
+  });
+
+  ipcMain.handle('aximote:setToken', async (_event, token) => {
+    try {
+      const ok = saveTokenSecure(token);
+      return { success: ok, error: ok ? null : 'Secure token storage unavailable on this system' };
+    } catch (err) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('aximote:listVehicles', async (_event, token) => {
+    try {
+      const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+      if (settings?.devDisableApiRequests === true) {
+        return { success: false, error: 'API requests are disabled in developer settings' };
+      }
+
+      const tokenValue = token || readTokenSecure();
+      const headers = buildHeaders(tokenValue);
+      if (!headers) return { success: false, error: 'Missing Personal Access Token' };
+
+      const response = await queryAximote(
+        [AXIMOTE_VEHICLES_PATH],
+        headers
+      );
+      if (!response.ok) return { success: false, error: response.error?.message || 'Failed to load vehicles' };
+
+      const vehicles = extractArray(response.payload, ['vehicles'])
+        .map((item, index) => normalizeVehicle(item, index))
+        .filter(v => v && v.id);
+      return { success: true, vehicles };
+    } catch (err) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('aximote:listTrips', async (_event, { token, vehicleId } = {}) => {
+    try {
+      const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+      if (settings?.devDisableApiRequests === true) {
+        return { success: false, error: 'API requests are disabled in developer settings' };
+      }
+
+      const tokenValue = token || readTokenSecure();
+      const headers = buildHeaders(tokenValue);
+      const id = String(vehicleId || '').trim();
+      if (!headers) return { success: false, error: 'Missing Personal Access Token' };
+      if (!id) return { success: false, error: 'Missing vehicle id' };
+
+      const response = await queryAximote(
+        [
+          `${AXIMOTE_TRIPS_PATH}?vehicleId=${encodeURIComponent(id)}`
+        ],
+        headers
+      );
+      if (!response.ok) return { success: false, error: response.error?.message || 'Failed to load trips' };
+
+      const trips = extractArray(response.payload, ['trips'])
+        .map((item, index) => normalizeTrip(item, index))
+        .filter(Boolean)
+        .sort((a, b) => a.startMs - b.startMs);
+
+      return { success: true, trips };
+    } catch (err) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('aximote:getTrip', async (_event, { token, tripId } = {}) => {
+    try {
+      const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+      if (settings?.devDisableApiRequests === true) {
+        return { success: false, error: 'API requests are disabled in developer settings' };
+      }
+
+      const tokenValue = token || readTokenSecure();
+      const headers = buildHeaders(tokenValue);
+      const id = String(tripId || '').trim();
+      if (!headers) return { success: false, error: 'Missing Personal Access Token' };
+      if (!id) return { success: false, error: 'Missing trip id' };
+
+      const response = await queryAximote([buildAximoteTripDetailPath(id)], headers);
+      if (!response.ok) return { success: false, error: response.error?.message || 'Failed to load trip details' };
+
+      const trip = normalizeTrip(response.payload, 0);
+      if (!trip) return { success: false, error: 'Trip details were missing required time fields' };
+      if (!hasTimedRoutePoints(trip.points)) {
+        try {
+          console.log(`[Aximote] Requesting GPX export for trip ${id}`);
+          const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GPX_PATH, AXIMOTE_BASE_URL);
+          const gpxText = await requestText(exportUrl, headers, {
+            method: 'POST',
+            jsonBody: { tripIds: [id] }
+          });
+          console.log(`[Aximote] GPX downloaded for trip ${id} (${gpxText.length} chars)`);
+          const gpxPoints = extractPointsFromTripGpx(gpxText);
+          const firstTs = gpxPoints[0]?.timestampMs ?? null;
+          const lastTs = gpxPoints[gpxPoints.length - 1]?.timestampMs ?? null;
+          console.log(`[Aximote] GPX parsed for trip ${id}: ${gpxPoints.length} points, firstTs=${firstTs}, lastTs=${lastTs}`);
+          if (gpxPoints.length > 1) trip.points = gpxPoints;
+        } catch (err) {
+          console.warn(`[Aximote] GPX export failed for trip ${id}:`, err?.message || err);
+        }
+      }
+      if (!Array.isArray(trip.points) || trip.points.length < 2) {
+        try {
+          const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH, AXIMOTE_BASE_URL);
+          const geojson = await requestJson(exportUrl, headers, {
+            method: 'POST',
+            jsonBody: { tripIds: [id] }
+          });
+          const geoPoints = extractPointsFromTripGeoJson(geojson, id);
+          if (geoPoints.length > 0) trip.points = geoPoints;
+        } catch {}
+      }
+      return { success: true, trip };
+    } catch (err) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+}
+
+module.exports = {
+  AXIMOTE_VEHICLES_PATH,
+  AXIMOTE_TRIPS_PATH,
+  AXIMOTE_REFUELS_PATH,
+  AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH,
+  AXIMOTE_TRIPS_EXPORT_GPX_PATH,
+  buildAximoteTripDetailPath,
+  extractPointsFromTripGeoJson,
+  extractPointsFromTripGpx,
+  hasTimedRoutePoints,
+  registerAximoteIpc,
+  buildHeaders,
+  normalizeBearerToken,
+  normalizeVehicle,
+  normalizeTrip,
+  pointFromRaw,
+  parseTimeMs
+};

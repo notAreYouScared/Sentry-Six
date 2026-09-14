@@ -661,6 +661,201 @@ export function matchClipsTodrives(drives, clipGroups, knownDates = null) {
     return hasFootage;
 }
 
+function normalizeTripPoint(point) {
+    if (!point || typeof point !== 'object') return null;
+    const lat = Number(point.lat);
+    const lon = Number(point.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    return {
+        lat,
+        lon,
+        heading: Number(point.heading) || 0,
+        speedMps: Number(point.speedMps) || 0
+    };
+}
+
+function calculatePathDistanceKm(points) {
+    if (!Array.isArray(points) || points.length < 2) return 0;
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+        total += haversineKm(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon);
+    }
+    return total;
+}
+
+function buildPathWithProgressTimestamps(points, startMs, durationMs) {
+    if (!Array.isArray(points) || points.length === 0) return [];
+    if (points.length === 1) return [{ ...points[0], timestampMs: startMs }];
+
+    const segmentKm = [];
+    let totalKm = 0;
+    for (let i = 1; i < points.length; i++) {
+        const km = haversineKm(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon);
+        segmentKm.push(km);
+        totalKm += km;
+    }
+    if (totalKm <= 0) {
+        return points.map((p, i) => ({
+            ...p,
+            timestampMs: startMs + Math.round((durationMs * i) / Math.max(1, points.length - 1))
+        }));
+    }
+
+    const rebuilt = [{ ...points[0], timestampMs: startMs }];
+    let cumulative = 0;
+    for (let i = 1; i < points.length; i++) {
+        cumulative += segmentKm[i - 1];
+        rebuilt.push({
+            ...points[i],
+            timestampMs: startMs + Math.round((durationMs * cumulative) / totalKm)
+        });
+    }
+    return rebuilt;
+}
+
+/**
+ * Normalize already-parsed Aximote trips to the drive shape used by the drives UI.
+ */
+export function buildAximoteDrives(trips, { vehicleLabel = '' } = {}) {
+    const rows = Array.isArray(trips) ? trips : [];
+    const drives = [];
+    for (let i = 0; i < rows.length; i++) {
+        const trip = rows[i] || {};
+        const startMs = Number(trip.startMs);
+        const endMs = Number(trip.endMs);
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+        const durationMs = Math.max(1, endMs - startMs);
+
+        const normalizedPoints = (trip.points || []).map(normalizeTripPoint).filter(Boolean);
+        const pathPoints = buildPathWithProgressTimestamps(normalizedPoints, startMs, durationMs);
+        const declaredDistanceKm = Number(trip.distanceKm);
+        const distanceKm = Number.isFinite(declaredDistanceKm) && declaredDistanceKm > 0
+            ? declaredDistanceKm
+            : calculatePathDistanceKm(pathPoints);
+
+        const tags = ['Aximote'];
+        if (vehicleLabel) tags.push(vehicleLabel);
+
+        drives.push({
+            id: `aximote-${trip.id ?? i + 1}`,
+            aximoteTripId: String(trip.id ?? i + 1),
+            vehicleId: trip.vehicleId ?? null,
+            source: 'aximote',
+            date: new Date(startMs).toISOString().slice(0, 10),
+            startMs,
+            endMs,
+            startTimeDisplay: msToTimeStr(startMs),
+            endTimeDisplay: msToTimeStr(endMs),
+            durationMs,
+            distanceKm,
+            distanceMi: distanceKm * 0.621371,
+            clipCount: 0,
+            pointCount: pathPoints.length,
+            hasFsd: false,
+            fsdEngagedMs: 0,
+            fsdDisengagements: 0,
+            fsdPercent: 0,
+            fsdDistanceKm: 0,
+            fsdDistanceMi: 0,
+            accelPushCount: 0,
+            startBatteryPct: Number.isFinite(Number(trip.startBatteryPct)) ? Number(trip.startBatteryPct) : null,
+            endBatteryPct: Number.isFinite(Number(trip.endBatteryPct)) ? Number(trip.endBatteryPct) : null,
+            tags,
+            routeTimestampKeys: [],
+            startPoint: pathPoints.length > 0 ? [pathPoints[0].lat, pathPoints[0].lon] : null,
+            endPoint: pathPoints.length > 0 ? [pathPoints[pathPoints.length - 1].lat, pathPoints[pathPoints.length - 1].lon] : null,
+            pathPoints,
+            points: pathPoints.map((p) => [p.lat, p.lon, p.heading || 0, p.speedMps || 0, 0]),
+            fsdEvents: []
+        });
+    }
+    drives.sort((a, b) => a.startMs - b.startMs);
+    return drives;
+}
+
+/**
+ * Match Aximote trips to clip groups by date/time overlap with duration tolerance.
+ */
+export function matchAximoteTripsToClips(drives, clipGroups, knownDates = null) {
+    const tripRows = Array.isArray(drives) ? drives : [];
+    const clips = (clipGroups || []).map(g => ({
+        key: g?.timestampKey,
+        startMs: parseRouteTimestampMs(g?.timestampKey ? `${g.timestampKey}-front.mp4` : '')
+    })).filter(c => c.key && Number.isFinite(c.startMs))
+        .sort((a, b) => a.startMs - b.startMs);
+
+    const hasFootage = new Set();
+    const matchedKeysByDriveId = new Map();
+    const lowerBound = (target) => {
+        let lo = 0;
+        let hi = clips.length;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (clips[mid].startMs < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const upperBound = (target) => {
+        let lo = 0;
+        let hi = clips.length;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (clips[mid].startMs <= target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+
+    for (const drive of tripRows) {
+        const driveStart = Number(drive?.startMs);
+        const driveEnd = Number(drive?.endMs);
+        if (!Number.isFinite(driveStart) || !Number.isFinite(driveEnd) || driveEnd <= driveStart) continue;
+
+        const windowStart = driveStart - 5 * 60_000;
+        const windowEnd = driveEnd + 5 * 60_000;
+        const startIdx = lowerBound(windowStart);
+        const endIdx = upperBound(windowEnd);
+        const overlapping = clips.slice(startIdx, endIdx);
+
+        let accepted = overlapping;
+        if (accepted.length > 0) {
+            const clipStart = accepted[0].startMs;
+            const clipEnd = accepted[accepted.length - 1].startMs + 60_000;
+            const overlapStart = Math.max(clipStart, driveStart);
+            const overlapEnd = Math.min(clipEnd, driveEnd);
+            const overlapMs = Math.max(0, overlapEnd - overlapStart);
+            const clipDurationMs = clipEnd - clipStart;
+            const driveDurationMs = Math.max(1, driveEnd - driveStart);
+            const durationDiff = Math.abs(clipDurationMs - driveDurationMs);
+            const maxDurationDiff = Math.max(120_000, driveDurationMs * 0.35);
+            const overlapRatio = overlapMs / driveDurationMs;
+            if (durationDiff > maxDurationDiff && overlapRatio < 0.5) {
+                accepted = [];
+            }
+        }
+
+        if (accepted.length === 0) {
+            const nearest = clips.find(c => Math.abs(c.startMs - driveStart) <= 2 * 60_000);
+            if (nearest) accepted = [nearest];
+        }
+
+        if (accepted.length > 0) {
+            const keys = accepted.map(c => c.key);
+            matchedKeysByDriveId.set(drive.id, keys);
+            hasFootage.add(drive.id);
+            continue;
+        }
+
+        if (knownDates?.has?.(drive.date)) {
+            hasFootage.add(drive.id);
+            matchedKeysByDriveId.set(drive.id, []);
+        }
+    }
+
+    return { hasFootage, matchedKeysByDriveId };
+}
+
 /**
  * Format duration in ms as human-readable string.
  * e.g., 5400000 → "1h 30m" or "45m"

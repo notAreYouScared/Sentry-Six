@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -49,6 +49,7 @@ function compositeBlurMasks(width, height, zones) {
 }
 const { checkUpdateWithTelemetry, processApiResponse } = require('./updateTelemetry');
 const { settingsPath, loadSettings, saveSettings, registerSettingsIpc } = require('./main/settings');
+const { registerAximoteIpc } = require('./main/aximote');
 const { SUPPORT_SERVER_URL, registerSupportChatIpc } = require('./main/supportChat');
 const { registerDiagnosticsStorageIpc } = require('./main/diagnostics');
 const { UPDATE_CONFIG, autoUpdater, getLatestVersionFromGitHub, registerAutoUpdateIpc, setupAutoUpdaterEvents } = require('./main/autoUpdate');
@@ -1974,6 +1975,7 @@ ipcMain.handle('dialog:openFile', async (_event, filters) => {
 
 // Settings module (extracted to src/main/settings.js)
 registerSettingsIpc();
+registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage });
 
 /**
  * Check if npm packages need to be installed after an update (dev mode only)
@@ -3068,4 +3070,3 @@ registerDiagnosticsStorageIpc(SUPPORT_SERVER_URL);
 
 // Support chat module (extracted to src/main/supportChat.js)
 registerSupportChatIpc();
-
