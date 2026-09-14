@@ -654,23 +654,14 @@ export function matchClipsTodrives(drives, clipGroups, knownDates = null) {
             function parseTimeMs(value) {
                 if (value === null || value === undefined || value === '') return null;
                 if (typeof value === 'number' && Number.isFinite(value)) {
-                    return value > 1e12 ? Math.round(value) : Math.round(value * 1000);
+                    if (value > 1e12) return Math.round(value);
+                    if (value > 1e10) return Math.round(value * 1000);
+                    return Math.round(value * 1000);
                 }
                 const n = Number(value);
                 if (Number.isFinite(n)) return parseTimeMs(n);
                 const ts = Date.parse(String(value));
                 return Number.isFinite(ts) ? ts : null;
-            }
-
-            function formatTimestampKey(ms) {
-                const d = new Date(ms);
-                const y = d.getFullYear();
-                const m = String(d.getMonth() + 1).padStart(2, '0');
-                const day = String(d.getDate()).padStart(2, '0');
-                const h = String(d.getHours()).padStart(2, '0');
-                const mi = String(d.getMinutes()).padStart(2, '0');
-                const s = String(d.getSeconds()).padStart(2, '0');
-                return `${y}-${m}-${day}_${h}-${mi}-${s}`;
             }
 
             function normalizeAximotePoint(point) {

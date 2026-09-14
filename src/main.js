@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1975,7 +1975,7 @@ ipcMain.handle('dialog:openFile', async (_event, filters) => {
 
 // Settings module (extracted to src/main/settings.js)
 registerSettingsIpc();
-registerAximoteIpc({ ipcMain, loadSettings });
+registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage });
 
 /**
  * Check if npm packages need to be installed after an update (dev mode only)

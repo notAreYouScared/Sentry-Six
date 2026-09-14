@@ -204,7 +204,52 @@ async function queryAximote(paths, headers) {
   return { ok: false, error: lastError || new Error('Aximote request failed') };
 }
 
-function registerAximoteIpc({ ipcMain, loadSettings } = {}) {
+function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage } = {}) {
+  function saveTokenSecure(token) {
+    const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+    const trimmed = String(token || '').trim();
+    if (!trimmed) {
+      delete settings.aximotePatEncrypted;
+      delete settings.aximotePat;
+      if (typeof saveSettings === 'function') saveSettings(settings);
+      return true;
+    }
+
+    if (!safeStorage?.isEncryptionAvailable?.()) return false;
+    const enc = safeStorage.encryptString(trimmed);
+    settings.aximotePatEncrypted = enc.toString('base64');
+    delete settings.aximotePat;
+    if (typeof saveSettings === 'function') saveSettings(settings);
+    return true;
+  }
+
+  function readTokenSecure() {
+    const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+    const encrypted = settings?.aximotePatEncrypted;
+    if (typeof encrypted === 'string' && encrypted.length > 0 && safeStorage?.isEncryptionAvailable?.()) {
+      try {
+        return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+      } catch {
+        return null;
+      }
+    }
+    return typeof settings?.aximotePat === 'string' ? settings.aximotePat : null;
+  }
+
+  ipcMain.handle('aximote:getToken', async () => {
+    const token = readTokenSecure();
+    return token || null;
+  });
+
+  ipcMain.handle('aximote:setToken', async (_event, token) => {
+    try {
+      const ok = saveTokenSecure(token);
+      return { success: ok, error: ok ? null : 'Secure token storage unavailable on this system' };
+    } catch (err) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
   ipcMain.handle('aximote:listVehicles', async (_event, token) => {
     try {
       const settings = typeof loadSettings === 'function' ? loadSettings() : {};
@@ -212,7 +257,8 @@ function registerAximoteIpc({ ipcMain, loadSettings } = {}) {
         return { success: false, error: 'API requests are disabled in developer settings' };
       }
 
-      const headers = buildHeaders(token);
+      const tokenValue = token || readTokenSecure();
+      const headers = buildHeaders(tokenValue);
       if (!headers) return { success: false, error: 'Missing Personal Access Token' };
 
       const response = await queryAximote(
@@ -222,7 +268,7 @@ function registerAximoteIpc({ ipcMain, loadSettings } = {}) {
       if (!response.ok) return { success: false, error: response.error?.message || 'Failed to load vehicles' };
 
       const vehicles = extractArray(response.payload, ['vehicles'])
-        .map(normalizeVehicle)
+        .map((item, index) => normalizeVehicle(item, index))
         .filter(v => v && v.id);
       return { success: true, vehicles };
     } catch (err) {
@@ -237,7 +283,8 @@ function registerAximoteIpc({ ipcMain, loadSettings } = {}) {
         return { success: false, error: 'API requests are disabled in developer settings' };
       }
 
-      const headers = buildHeaders(token);
+      const tokenValue = token || readTokenSecure();
+      const headers = buildHeaders(tokenValue);
       const id = String(vehicleId || '').trim();
       if (!headers) return { success: false, error: 'Missing Personal Access Token' };
       if (!id) return { success: false, error: 'Missing vehicle id' };
@@ -256,7 +303,7 @@ function registerAximoteIpc({ ipcMain, loadSettings } = {}) {
       if (!response.ok) return { success: false, error: response.error?.message || 'Failed to load trips' };
 
       const trips = extractArray(response.payload, ['trips'])
-        .map(normalizeTrip)
+        .map((item, index) => normalizeTrip(item, index))
         .filter(Boolean)
         .sort((a, b) => a.startMs - b.startMs);
 

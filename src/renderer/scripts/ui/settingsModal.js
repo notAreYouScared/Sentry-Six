@@ -593,7 +593,7 @@ export function initSettingsModal() {
 
     if (window.electronAPI?.getSetting) {
         Promise.all([
-            window.electronAPI.getSetting('aximotePat'),
+            window.electronAPI.aximoteGetToken?.(),
             window.electronAPI.getSetting('aximoteVehicleId'),
             window.electronAPI.getSetting('aximoteVehicleName')
         ]).then(([savedPat, savedVehicleId, savedVehicleName]) => {
@@ -615,7 +615,11 @@ export function initSettingsModal() {
                 setAximoteStatus('Enter your Personal Access Token first.', 'error');
                 return;
             }
-            await window.electronAPI?.setSetting?.('aximotePat', token);
+            const saveRes = await window.electronAPI?.aximoteSetToken?.(token);
+            if (saveRes?.success === false) {
+                setAximoteStatus(saveRes.error || 'Unable to save token securely.', 'error');
+                return;
+            }
             setAximoteStatus('Aximote token saved.', 'success');
             aximoteSavePatBtn.blur();
         };
@@ -632,7 +636,11 @@ export function initSettingsModal() {
             aximoteLoadVehiclesBtn.disabled = true;
             setAximoteStatus('Loading vehicles…', 'success');
             try {
-                await window.electronAPI?.setSetting?.('aximotePat', token);
+                const saveRes = await window.electronAPI?.aximoteSetToken?.(token);
+                if (saveRes?.success === false) {
+                    setAximoteStatus(saveRes.error || 'Unable to save token securely.', 'error');
+                    return;
+                }
                 const res = await window.electronAPI?.aximoteListVehicles?.(token);
                 if (!res?.success) {
                     setAximoteStatus(res?.error || 'Unable to load vehicles.', 'error');

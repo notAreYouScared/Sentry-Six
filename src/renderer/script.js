@@ -1639,6 +1639,7 @@ async function selectDriveCollection(drive) {
         sortEpoch: lastStart + 60_000,
         driveMapPath: driveMapPath.length > 0 ? driveMapPath : null,
         driveFsdEvents: drive.fsdEvents ?? [],
+        isAximoteTrip: drive.source === 'aximote',
     };
 
     if (!library.dayCollections) library.dayCollections = new Map();
@@ -1939,12 +1940,12 @@ window._clearSentryUsbData = clearSentryUsbData;
 
 async function syncAximoteTrips({ silent = false } = {}) {
     const api = window.electronAPI;
-    if (!api?.getSetting || !api?.aximoteListTrips) {
+    if (!api?.getSetting || !api?.aximoteListTrips || !api?.aximoteGetToken) {
         return { success: false, error: 'Aximote integration unavailable' };
     }
 
     const [token, vehicleId, vehicleName] = await Promise.all([
-        api.getSetting('aximotePat'),
+        api.aximoteGetToken?.(),
         api.getSetting('aximoteVehicleId'),
         api.getSetting('aximoteVehicleName')
     ]);
@@ -2016,10 +2017,14 @@ setTimeout(loadSentryUsbDataOnStartup, 800);
 
 // Auto-load Aximote trips on startup when configured and no SentryUSB file was loaded.
 async function loadAximoteTripsOnStartup() {
-    if (state.sentryUsb.loaded) return;
+    if (state.sentryUsb.loading) {
+        setTimeout(loadAximoteTripsOnStartup, 400);
+        return;
+    }
+    if (state.sentryUsb.loaded || state.sentryUsb.dataPath) return;
     if (!window.electronAPI?.getSetting) return;
     const [token, vehicleId] = await Promise.all([
-        window.electronAPI.getSetting('aximotePat'),
+        window.electronAPI.aximoteGetToken?.(),
         window.electronAPI.getSetting('aximoteVehicleId')
     ]);
     if (token && vehicleId) {
@@ -4512,7 +4517,7 @@ function getAximotePathPointAtMs(playbackMs) {
 }
 
 function updateAximoteMapMarker(playbackMs) {
-    if (state.sentryUsb.source !== 'aximote') return false;
+    if (!state.collection.active?.isAximoteTrip) return false;
     const pseudoSei = getAximotePathPointAtMs(playbackMs);
     if (!pseudoSei) return false;
     updateMapMarker(pseudoSei, () => true);

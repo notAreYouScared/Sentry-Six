@@ -41,4 +41,24 @@ describe('aximote helpers', () => {
     expect(trip.distanceKm).toBeCloseTo(1.5);
     expect(trip.points.length).toBe(2);
   });
+
+  test('normalizes trip with explicit end time', () => {
+    const trip = normalizeTrip({
+      trip_id: 'abc',
+      startTime: 1700000000,
+      endTime: 1700000180
+    }, 0);
+    expect(trip.id).toBe('abc');
+    expect(trip.durationMs).toBe(180000);
+  });
+
+  test('returns null for invalid trip timing', () => {
+    const missingStart = normalizeTrip({ endTime: '2025-01-01T00:10:00Z' }, 0);
+    const reversed = normalizeTrip({
+      startTime: '2025-01-01T00:10:00Z',
+      endTime: '2025-01-01T00:00:00Z'
+    }, 0);
+    expect(missingStart).toBeNull();
+    expect(reversed).toBeNull();
+  });
 });
