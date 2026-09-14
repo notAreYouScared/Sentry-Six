@@ -1395,6 +1395,7 @@ let showDriveStats = localStorage.getItem(SHOW_DRIVE_STATS_KEY) !== '0';
 
 const SHOW_FSD_EVENTS_KEY = 'showFsdEvents';
 let showFsdEvents = localStorage.getItem(SHOW_FSD_EVENTS_KEY) !== '0';
+let driveSyncRequestSeq = 0;
 
 function refreshDriveFootageMatches() {
     const drives = state.sentryUsb?.drives || [];
@@ -1840,6 +1841,7 @@ const _inFlightSentryUsbLoads = new Map();
  */
 async function loadSentryUsbData(filePath) {
     if (!filePath) return { success: false, error: 'No file path provided' };
+    const requestSeq = ++driveSyncRequestSeq;
 
     // If the same file is already being loaded, return that promise instead of
     // kicking off a second parallel parse of a potentially 1GB file.
@@ -1864,6 +1866,10 @@ async function loadSentryUsbData(filePath) {
             }
             const { topKeys, routesLen, drives, driveCount, routeCount } = result;
             console.log(`[SentryUSB] File keys: ${(topKeys || []).join(', ')} | Routes: ${routesLen ?? 'not found'}`);
+            if (requestSeq !== driveSyncRequestSeq) {
+                console.log('[SentryUSB] Ignoring stale load result');
+                return { success: false, stale: true };
+            }
 
             sentryUsb.dataPath = filePath;
             sentryUsb.source = 'sentryusb';
@@ -1893,7 +1899,7 @@ async function loadSentryUsbData(filePath) {
             console.error('[SentryUSB] Failed to load drive data:', err);
             return { success: false, error: err?.message || String(err) };
         } finally {
-            sentryUsb.loading = false;
+            if (requestSeq === driveSyncRequestSeq) sentryUsb.loading = false;
             _inFlightSentryUsbLoads.delete(filePath);
             // Always refresh the Drives tab and badge after the load settles so
             // success → drive list, failure → empty placeholder.
@@ -1956,6 +1962,7 @@ async function syncAximoteTrips({ silent = false } = {}) {
     }
 
     const sentryUsb = state.sentryUsb;
+    const requestSeq = ++driveSyncRequestSeq;
     sentryUsb.loading = true;
     try { renderDriveList(); } catch {}
 
@@ -1965,6 +1972,9 @@ async function syncAximoteTrips({ silent = false } = {}) {
             const err = result?.error || 'Failed to load Aximote trips';
             if (!silent) notify(err, { type: 'error' });
             return { success: false, error: err };
+        }
+        if (requestSeq !== driveSyncRequestSeq) {
+            return { success: false, stale: true };
         }
 
         const drives = buildAximoteDrives(result.trips || [], { vehicleLabel: vehicleName || '' });
@@ -1987,7 +1997,7 @@ async function syncAximoteTrips({ silent = false } = {}) {
         if (!silent) notify(error, { type: 'error' });
         return { success: false, error };
     } finally {
-        sentryUsb.loading = false;
+        if (requestSeq === driveSyncRequestSeq) sentryUsb.loading = false;
         try { updateDrivesTabVisibility(); } catch {}
         try { renderDriveList(); } catch {}
     }
@@ -2023,10 +2033,12 @@ async function loadAximoteTripsOnStartup() {
     }
     if (state.sentryUsb.loaded || state.sentryUsb.dataPath) return;
     if (!window.electronAPI?.getSetting) return;
-    const [token, vehicleId] = await Promise.all([
+    const [savedSentryPath, token, vehicleId] = await Promise.all([
+        window.electronAPI.getSetting('sentryUsbDataPath'),
         window.electronAPI.aximoteGetToken?.(),
         window.electronAPI.getSetting('aximoteVehicleId')
     ]);
+    if (savedSentryPath) return;
     if (token && vehicleId) {
         await syncAximoteTrips({ silent: true });
     }
@@ -4493,14 +4505,37 @@ function getCollectionPlaybackMs(currentVidMs) {
     return segStartSec * 1000 + currentVidMs;
 }
 
+let aximoteMapCursor = 0;
+let aximoteMapCursorPath = null;
+
 function getAximotePathPointAtMs(playbackMs) {
     const path = state.collection.active?.driveMapPath;
     if (!Array.isArray(path) || path.length === 0) return null;
     const hasTiming = Number.isFinite(path[0]?.timestampMs) && path[path.length - 1]?.timestampMs > path[0]?.timestampMs;
     if (!hasTiming) return null;
 
-    let idx = 0;
-    while (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= playbackMs) idx++;
+    if (path !== aximoteMapCursorPath) {
+        aximoteMapCursorPath = path;
+        aximoteMapCursor = 0;
+    }
+
+    let idx = aximoteMapCursor;
+    if (idx + 1 < path.length && (path[idx].timestampMs || 0) <= playbackMs && (path[idx + 1].timestampMs || 0) > playbackMs) {
+        // cursor hit
+    } else if (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= playbackMs) {
+        while (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= playbackMs) idx++;
+    } else {
+        let lo = 0;
+        let hi = path.length - 1;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi + 1) / 2);
+            if ((path[mid].timestampMs || 0) <= playbackMs) lo = mid;
+            else hi = mid - 1;
+        }
+        idx = lo;
+    }
+    aximoteMapCursor = idx;
+
     const point = path[idx];
     const next = path[Math.min(path.length - 1, idx + 1)];
     const heading = Number.isFinite(point?.heading) ? point.heading : (() => {
