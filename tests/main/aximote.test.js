@@ -8,7 +8,10 @@ const {
   AXIMOTE_VEHICLES_PATH,
   AXIMOTE_TRIPS_PATH,
   AXIMOTE_REFUELS_PATH,
-  buildAximoteTripDetailPath
+  AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH,
+  AXIMOTE_TRIPS_EXPORT_GPX_PATH,
+  buildAximoteTripDetailPath,
+  extractPointsFromTripGeoJson
 } = require('../../src/main/aximote');
 
 describe('aximote helpers', () => {
@@ -70,12 +73,16 @@ describe('aximote helpers', () => {
       startTime: '2026-09-14T15:54:18.894Z',
       durationSec: 184,
       distanceKm: 1.83,
+      startBatteryLevel: 78,
+      endBatteryLevel: 77,
       startLocation: { latitude: 42.5072494, longitude: -83.023894 },
       endLocation: { latitude: 42.5047745, longitude: -83.0396698 }
     }, 0);
 
     expect(trip.vehicleId).toBe('veh-1');
     expect(trip.durationMs).toBe(184000);
+    expect(trip.startBatteryPct).toBe(78);
+    expect(trip.endBatteryPct).toBe(77);
     expect(trip.points.length).toBe(2);
     expect(trip.points[0].lat).toBeCloseTo(42.5072494);
     expect(trip.points[1].lon).toBeCloseTo(-83.0396698);
@@ -107,6 +114,24 @@ describe('aximote helpers', () => {
     expect(AXIMOTE_VEHICLES_PATH).toBe('/api/public/v1/vehicles');
     expect(AXIMOTE_TRIPS_PATH).toBe('/api/public/v1/trips');
     expect(AXIMOTE_REFUELS_PATH).toBe('/api/public/v1/refuels');
+    expect(AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH).toBe('/api/public/v1/trips/export/geojson');
+    expect(AXIMOTE_TRIPS_EXPORT_GPX_PATH).toBe('/api/public/v1/trips/export/gpx');
     expect(buildAximoteTripDetailPath('trip-123')).toBe('/api/public/v1/trips/trip-123');
+  });
+
+  test('extracts trip points from geojson export', () => {
+    const payload = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          id: 'trip-123',
+          geometry: { type: 'LineString', coordinates: [[-83.02, 42.50], [-83.03, 42.51]] }
+        }
+      ]
+    };
+    const points = extractPointsFromTripGeoJson(payload, 'trip-123');
+    expect(points.length).toBe(2);
+    expect(points[0].lat).toBeCloseTo(42.5);
+    expect(points[0].lon).toBeCloseTo(-83.02);
   });
 });

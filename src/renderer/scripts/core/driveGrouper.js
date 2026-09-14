@@ -758,6 +758,8 @@ export function buildAximoteDrives(trips, { vehicleLabel = '' } = {}) {
             fsdDistanceKm: 0,
             fsdDistanceMi: 0,
             accelPushCount: 0,
+            startBatteryPct: Number.isFinite(Number(trip.startBatteryPct)) ? Number(trip.startBatteryPct) : null,
+            endBatteryPct: Number.isFinite(Number(trip.endBatteryPct)) ? Number(trip.endBatteryPct) : null,
             tags,
             routeTimestampKeys: [],
             startPoint: pathPoints.length > 0 ? [pathPoints[0].lat, pathPoints[0].lon] : null,

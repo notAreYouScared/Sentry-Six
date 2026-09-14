@@ -1554,6 +1554,8 @@ async function selectDriveCollection(drive) {
                         drive.distanceKm = hydrated.distanceKm;
                         drive.distanceMi = hydrated.distanceMi;
                         drive.pointCount = hydrated.pointCount;
+                        drive.startBatteryPct = hydrated.startBatteryPct;
+                        drive.endBatteryPct = hydrated.endBatteryPct;
                         if ((!Array.isArray(drive.routeTimestampKeys) || drive.routeTimestampKeys.length === 0) && Array.isArray(hydrated.routeTimestampKeys)) {
                             drive.routeTimestampKeys = hydrated.routeTimestampKeys;
                         }

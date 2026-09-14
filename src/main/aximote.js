@@ -5,6 +5,8 @@ const AXIMOTE_PUBLIC_V1_BASE = '/api/public/v1';
 const AXIMOTE_VEHICLES_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/vehicles`;
 const AXIMOTE_TRIPS_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/trips`;
 const AXIMOTE_REFUELS_PATH = `${AXIMOTE_PUBLIC_V1_BASE}/refuels`;
+const AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH = `${AXIMOTE_TRIPS_PATH}/export/geojson`;
+const AXIMOTE_TRIPS_EXPORT_GPX_PATH = `${AXIMOTE_TRIPS_PATH}/export/gpx`;
 const REQUEST_TIMEOUT_MS = 20_000;
 
 function buildHeaders(token) {
@@ -26,9 +28,17 @@ function normalizeBearerToken(token) {
   return m ? String(m[1] || '').trim() : raw;
 }
 
-function requestJson(url, headers) {
+function requestJson(url, headers, { method = 'GET', jsonBody = null } = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers, timeout: REQUEST_TIMEOUT_MS }, (res) => {
+    const reqHeaders = { ...(headers || {}) };
+    let bodyStr = null;
+    if (jsonBody !== null && jsonBody !== undefined) {
+      bodyStr = JSON.stringify(jsonBody);
+      reqHeaders['Content-Type'] = 'application/json';
+      reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr);
+    }
+
+    const req = https.request(url, { method, headers: reqHeaders, timeout: REQUEST_TIMEOUT_MS }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk.toString('utf8'); });
       res.on('end', () => {
@@ -50,6 +60,8 @@ function requestJson(url, headers) {
     });
     req.on('timeout', () => req.destroy(new Error('Request timed out')));
     req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
   });
 }
 
@@ -69,6 +81,12 @@ function extractArray(payload, candidateKeys = []) {
 function asNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function asPercent(value) {
+  const num = asNumber(value);
+  if (num === null) return null;
+  return Math.max(0, Math.min(100, num));
 }
 
 function parseTimeMs(value) {
@@ -190,6 +208,27 @@ function normalizeTrip(trip, idx) {
     (distanceMilesRaw !== null ? distanceMilesRaw * 1.60934 : null) ??
     0;
 
+  const startBatteryPct = asPercent(
+    trip?.startBatteryPct ??
+    trip?.startBatteryPercent ??
+    trip?.startBatteryLevel ??
+    trip?.startBatteryLevelPct ??
+    trip?.startStateOfChargePct ??
+    trip?.startStateOfCharge ??
+    trip?.startSoc ??
+    trip?.startSOC
+  );
+  const endBatteryPct = asPercent(
+    trip?.endBatteryPct ??
+    trip?.endBatteryPercent ??
+    trip?.endBatteryLevel ??
+    trip?.endBatteryLevelPct ??
+    trip?.endStateOfChargePct ??
+    trip?.endStateOfCharge ??
+    trip?.endSoc ??
+    trip?.endSOC
+  );
+
   return {
     id: String(
       trip?.id ??
@@ -203,6 +242,8 @@ function normalizeTrip(trip, idx) {
     endMs,
     durationMs: endMs - startMs,
     distanceKm: Number.isFinite(distanceKm) ? Math.max(0, distanceKm) : 0,
+    startBatteryPct,
+    endBatteryPct,
     points
   };
 }
@@ -224,6 +265,21 @@ async function queryAximote(paths, headers) {
 
 function buildAximoteTripDetailPath(tripId) {
   return `${AXIMOTE_TRIPS_PATH}/${encodeURIComponent(String(tripId || '').trim())}`;
+}
+
+function extractPointsFromTripGeoJson(payload, tripId) {
+  const rows = Array.isArray(payload?.features) ? payload.features : [];
+  const targetId = String(tripId || '');
+  let feature = rows.find(f => String(f?.id || f?.properties?.id || '') === targetId);
+  if (!feature && rows.length > 0) feature = rows[0];
+  const coords = Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates : [];
+  return coords.map((c) => {
+    if (!Array.isArray(c) || c.length < 2) return null;
+    const lon = asNumber(c[0]);
+    const lat = asNumber(c[1]);
+    if (lat === null || lon === null) return null;
+    return { lat, lon, heading: 0, speedMps: 0, timestampMs: 0 };
+  }).filter(Boolean);
 }
 
 function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage } = {}) {
@@ -348,6 +404,17 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
 
       const trip = normalizeTrip(response.payload, 0);
       if (!trip) return { success: false, error: 'Trip details were missing required time fields' };
+      if (!Array.isArray(trip.points) || trip.points.length < 2) {
+        try {
+          const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH, AXIMOTE_BASE_URL);
+          const geojson = await requestJson(exportUrl, headers, {
+            method: 'POST',
+            jsonBody: { tripIds: [id] }
+          });
+          const geoPoints = extractPointsFromTripGeoJson(geojson, id);
+          if (geoPoints.length > 0) trip.points = geoPoints;
+        } catch {}
+      }
       return { success: true, trip };
     } catch (err) {
       return { success: false, error: err?.message || String(err) };
@@ -359,7 +426,10 @@ module.exports = {
   AXIMOTE_VEHICLES_PATH,
   AXIMOTE_TRIPS_PATH,
   AXIMOTE_REFUELS_PATH,
+  AXIMOTE_TRIPS_EXPORT_GEOJSON_PATH,
+  AXIMOTE_TRIPS_EXPORT_GPX_PATH,
   buildAximoteTripDetailPath,
+  extractPointsFromTripGeoJson,
   registerAximoteIpc,
   buildHeaders,
   normalizeBearerToken,
