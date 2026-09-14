@@ -158,6 +158,27 @@ describe('aximote helpers', () => {
     expect(points[1].heading).toBe(0);
   });
 
+  test('parses GPX 1.1 track points with namespace extensions', () => {
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Aximote" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">
+  <trk><trkseg>
+    <trkpt lat="42.6000" lon="-83.1000">
+      <time>2026-09-14T16:00:00Z</time>
+      <gpxtpx:course>181.5</gpxtpx:course>
+      <gpxtpx:speed>9.2</gpxtpx:speed>
+    </trkpt>
+    <trkpt lat="42.6010" lon="-83.1010">
+      <time>2026-09-14T16:00:05Z</time>
+    </trkpt>
+  </trkseg></trk>
+</gpx>`;
+    const points = extractPointsFromTripGpx(gpx);
+    expect(points.length).toBe(2);
+    expect(points[0].heading).toBeCloseTo(181.5);
+    expect(points[0].speedMps).toBeCloseTo(9.2);
+    expect(points[1].timestampMs).toBeGreaterThan(points[0].timestampMs);
+  });
+
   test('detects timed route points correctly', () => {
     expect(hasTimedRoutePoints([{ lat: 1, lon: 2, timestampMs: 0 }, { lat: 2, lon: 3, timestampMs: 0 }])).toBe(false);
     expect(hasTimedRoutePoints([{ lat: 1, lon: 2, timestampMs: 1000 }, { lat: 2, lon: 3, timestampMs: 1000 }])).toBe(false);

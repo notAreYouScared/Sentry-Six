@@ -475,14 +475,21 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
       if (!trip) return { success: false, error: 'Trip details were missing required time fields' };
       if (!hasTimedRoutePoints(trip.points)) {
         try {
+          console.log(`[Aximote] Requesting GPX export for trip ${id}`);
           const exportUrl = new URL(AXIMOTE_TRIPS_EXPORT_GPX_PATH, AXIMOTE_BASE_URL);
           const gpxText = await requestText(exportUrl, headers, {
             method: 'POST',
             jsonBody: { tripIds: [id] }
           });
+          console.log(`[Aximote] GPX downloaded for trip ${id} (${gpxText.length} chars)`);
           const gpxPoints = extractPointsFromTripGpx(gpxText);
+          const firstTs = gpxPoints[0]?.timestampMs ?? null;
+          const lastTs = gpxPoints[gpxPoints.length - 1]?.timestampMs ?? null;
+          console.log(`[Aximote] GPX parsed for trip ${id}: ${gpxPoints.length} points, firstTs=${firstTs}, lastTs=${lastTs}`);
           if (gpxPoints.length > 1) trip.points = gpxPoints;
-        } catch {}
+        } catch (err) {
+          console.warn(`[Aximote] GPX export failed for trip ${id}:`, err?.message || err);
+        }
       }
       if (!Array.isArray(trip.points) || trip.points.length < 2) {
         try {

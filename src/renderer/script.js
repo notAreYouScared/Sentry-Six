@@ -1667,6 +1667,14 @@ async function selectDriveCollection(drive) {
         }));
 
     const collKey = `drive-${drive.id}`;
+    const firstTimedPathPoint = driveMapPath.find((point) => Number.isFinite(Number(point?.timestampMs)) && Number(point.timestampMs) > 0);
+    const routeStartMs = Number(firstTimedPathPoint?.timestampMs);
+    const clipStartEpochMs = Number.isFinite(startEpochMs) ? startEpochMs : null;
+    let aximoteRouteDriftMs = 0;
+    if (Number.isFinite(routeStartMs) && Number.isFinite(clipStartEpochMs)) {
+        const driftCandidate = clipStartEpochMs - routeStartMs;
+        if (Math.abs(driftCandidate) <= 20_000) aximoteRouteDriftMs = driftCandidate;
+    }
     const coll = {
         id: collKey,
         key: collKey,
@@ -1680,6 +1688,8 @@ async function selectDriveCollection(drive) {
         anchorMs: 0,
         anchorGroupId: matchingGroups[0]?.id || null,
         sortEpoch: lastStart + 60_000,
+        clipStartEpochMs,
+        aximoteRouteDriftMs,
         driveMapPath: driveMapPath.length > 0 ? driveMapPath : null,
         driveFsdEvents: drive.fsdEvents ?? [],
         isAximoteTrip: drive.source === 'aximote',
@@ -4554,10 +4564,18 @@ let aximoteMapCursor = 0;
 let aximoteMapCursorPath = null;
 
 function getAximotePathPointAtMs(playbackMs) {
-    const path = state.collection.active?.driveMapPath;
+    const activeCollection = state.collection.active;
+    const path = activeCollection?.driveMapPath;
     if (!Array.isArray(path) || path.length === 0) return null;
     const hasTiming = Number.isFinite(path[0]?.timestampMs) && path[path.length - 1]?.timestampMs > path[0]?.timestampMs;
     if (!hasTiming) return null;
+    const firstTimestampMs = Number(path[0]?.timestampMs);
+    const isEpochPath = Number.isFinite(firstTimestampMs) && firstTimestampMs > 1e11;
+    const clipStartEpochMs = Number(activeCollection?.clipStartEpochMs);
+    const driftMs = Number(activeCollection?.aximoteRouteDriftMs) || 0;
+    const targetMs = isEpochPath && Number.isFinite(clipStartEpochMs) && clipStartEpochMs > 1e11
+        ? clipStartEpochMs + Number(playbackMs || 0) - driftMs
+        : Number(playbackMs || 0);
 
     if (path !== aximoteMapCursorPath) {
         aximoteMapCursorPath = path;
@@ -4565,16 +4583,16 @@ function getAximotePathPointAtMs(playbackMs) {
     }
 
     let idx = aximoteMapCursor;
-    if (idx + 1 < path.length && (path[idx].timestampMs || 0) <= playbackMs && (path[idx + 1].timestampMs || 0) > playbackMs) {
+    if (idx + 1 < path.length && (path[idx].timestampMs || 0) <= targetMs && (path[idx + 1].timestampMs || 0) > targetMs) {
         // cursor hit
-    } else if (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= playbackMs) {
-        while (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= playbackMs) idx++;
+    } else if (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= targetMs) {
+        while (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= targetMs) idx++;
     } else {
         let lo = 0;
         let hi = path.length - 1;
         while (lo < hi) {
             const mid = Math.floor((lo + hi + 1) / 2);
-            if ((path[mid].timestampMs || 0) <= playbackMs) lo = mid;
+            if ((path[mid].timestampMs || 0) <= targetMs) lo = mid;
             else hi = mid - 1;
         }
         idx = lo;
