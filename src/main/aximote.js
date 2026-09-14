@@ -64,8 +64,8 @@ function parseTimeMs(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return null;
-    if (value > 1e12) return Math.round(value);
-    if (value > 1e10) return Math.round(value * 1000);
+    if (value > 1e11) return Math.round(value);
+    if (value > 1e9) return Math.round(value * 1000);
     return Math.round(value * 1000);
   }
   const n = asNumber(value);
@@ -236,9 +236,9 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
     return typeof settings?.aximotePat === 'string' ? settings.aximotePat : null;
   }
 
-  ipcMain.handle('aximote:getToken', async () => {
+  ipcMain.handle('aximote:isConfigured', async () => {
     const token = readTokenSecure();
-    return token || null;
+    return !!(token && String(token).trim().length > 0);
   });
 
   ipcMain.handle('aximote:setToken', async (_event, token) => {

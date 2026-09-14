@@ -1946,19 +1946,18 @@ window._clearSentryUsbData = clearSentryUsbData;
 
 async function syncAximoteTrips({ silent = false } = {}) {
     const api = window.electronAPI;
-    if (!api?.getSetting || !api?.aximoteListTrips || !api?.aximoteGetToken) {
+    if (!api?.getSetting || !api?.aximoteListTrips) {
         return { success: false, error: 'Aximote integration unavailable' };
     }
 
-    const [token, vehicleId, vehicleName] = await Promise.all([
-        api.aximoteGetToken?.(),
+    const [vehicleId, vehicleName] = await Promise.all([
         api.getSetting('aximoteVehicleId'),
         api.getSetting('aximoteVehicleName')
     ]);
 
-    if (!token || !vehicleId) {
+    if (!vehicleId) {
         if (!silent) notify('Set your Aximote token and vehicle first.', { type: 'warning' });
-        return { success: false, error: 'Missing token or vehicle' };
+        return { success: false, error: 'Missing vehicle' };
     }
 
     const sentryUsb = state.sentryUsb;
@@ -1967,7 +1966,7 @@ async function syncAximoteTrips({ silent = false } = {}) {
     try { renderDriveList(); } catch {}
 
     try {
-        const result = await api.aximoteListTrips({ token, vehicleId });
+        const result = await api.aximoteListTrips({ vehicleId });
         if (!result?.success) {
             const err = result?.error || 'Failed to load Aximote trips';
             if (!silent) notify(err, { type: 'error' });
@@ -2033,13 +2032,13 @@ async function loadAximoteTripsOnStartup() {
     }
     if (state.sentryUsb.loaded || state.sentryUsb.dataPath) return;
     if (!window.electronAPI?.getSetting) return;
-    const [savedSentryPath, token, vehicleId] = await Promise.all([
+    const [savedSentryPath, configured, vehicleId] = await Promise.all([
         window.electronAPI.getSetting('sentryUsbDataPath'),
-        window.electronAPI.aximoteGetToken?.(),
+        window.electronAPI.aximoteIsConfigured?.(),
         window.electronAPI.getSetting('aximoteVehicleId')
     ]);
     if (savedSentryPath) return;
-    if (token && vehicleId) {
+    if (configured && vehicleId) {
         await syncAximoteTrips({ silent: true });
     }
 }

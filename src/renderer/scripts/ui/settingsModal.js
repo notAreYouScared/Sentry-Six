@@ -593,11 +593,9 @@ export function initSettingsModal() {
 
     if (window.electronAPI?.getSetting) {
         Promise.all([
-            window.electronAPI.aximoteGetToken?.(),
             window.electronAPI.getSetting('aximoteVehicleId'),
             window.electronAPI.getSetting('aximoteVehicleName')
-        ]).then(([savedPat, savedVehicleId, savedVehicleName]) => {
-            if (aximotePatInput && savedPat) aximotePatInput.value = savedPat;
+        ]).then(([savedVehicleId, savedVehicleName]) => {
             if (aximoteVehicleSelect && savedVehicleId) {
                 populateAximoteVehicles(
                     [{ id: savedVehicleId, label: savedVehicleName || `Selected (${savedVehicleId})` }],
@@ -629,19 +627,17 @@ export function initSettingsModal() {
         aximoteLoadVehiclesBtn.onclick = async (e) => {
             e.preventDefault();
             const token = (aximotePatInput?.value || '').trim();
-            if (!token) {
-                setAximoteStatus('Enter your Personal Access Token first.', 'error');
-                return;
-            }
             aximoteLoadVehiclesBtn.disabled = true;
             setAximoteStatus('Loading vehicles…', 'success');
             try {
-                const saveRes = await window.electronAPI?.aximoteSetToken?.(token);
-                if (saveRes?.success === false) {
-                    setAximoteStatus(saveRes.error || 'Unable to save token securely.', 'error');
-                    return;
+                if (token) {
+                    const saveRes = await window.electronAPI?.aximoteSetToken?.(token);
+                    if (saveRes?.success === false) {
+                        setAximoteStatus(saveRes.error || 'Unable to save token securely.', 'error');
+                        return;
+                    }
                 }
-                const res = await window.electronAPI?.aximoteListVehicles?.(token);
+                const res = await window.electronAPI?.aximoteListVehicles?.();
                 if (!res?.success) {
                     setAximoteStatus(res?.error || 'Unable to load vehicles.', 'error');
                     return;
