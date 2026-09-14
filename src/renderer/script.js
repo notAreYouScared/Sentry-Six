@@ -1537,6 +1537,34 @@ function refreshFsdEventMarkers() {
  * calendar dates the drive spans and combining their clip groups.
  */
 async function selectDriveCollection(drive) {
+    if (drive?.source === 'aximote' && (!Array.isArray(drive.pathPoints) || drive.pathPoints.length === 0)) {
+        const tripId = String(drive.aximoteTripId || '').trim();
+        if (tripId && window.electronAPI?.aximoteGetTrip) {
+            try {
+                const detail = await window.electronAPI.aximoteGetTrip({ tripId });
+                if (detail?.success && detail.trip) {
+                    const hydrated = buildAximoteDrives([detail.trip], {
+                        vehicleLabel: state.sentryUsb.vehicleName || ''
+                    })[0];
+                    if (hydrated) {
+                        drive.pathPoints = hydrated.pathPoints;
+                        drive.points = hydrated.points;
+                        drive.startPoint = hydrated.startPoint;
+                        drive.endPoint = hydrated.endPoint;
+                        drive.distanceKm = hydrated.distanceKm;
+                        drive.distanceMi = hydrated.distanceMi;
+                        drive.pointCount = hydrated.pointCount;
+                        if ((!Array.isArray(drive.routeTimestampKeys) || drive.routeTimestampKeys.length === 0) && Array.isArray(hydrated.routeTimestampKeys)) {
+                            drive.routeTimestampKeys = hydrated.routeTimestampKeys;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('[Aximote] Failed to hydrate trip GPS from trip detail:', err);
+            }
+        }
+    }
+
     // Collect all unique calendar dates this drive spans (from its route timestamp keys)
     const routeKeys = Array.isArray(drive.routeTimestampKeys) ? drive.routeTimestampKeys : [];
     const neededDates = [...new Set(routeKeys.map(k => k.split('_')[0]).filter(Boolean))];

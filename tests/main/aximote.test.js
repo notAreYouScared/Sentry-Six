@@ -63,6 +63,24 @@ describe('aximote helpers', () => {
     expect(trip.durationMs).toBe(180000);
   });
 
+  test('uses durationSec and location fallback points from trip detail payload', () => {
+    const trip = normalizeTrip({
+      id: 'detail-1',
+      vehicleId: 'veh-1',
+      startTime: '2026-09-14T15:54:18.894Z',
+      durationSec: 184,
+      distanceKm: 1.83,
+      startLocation: { latitude: 42.5072494, longitude: -83.023894 },
+      endLocation: { latitude: 42.5047745, longitude: -83.0396698 }
+    }, 0);
+
+    expect(trip.vehicleId).toBe('veh-1');
+    expect(trip.durationMs).toBe(184000);
+    expect(trip.points.length).toBe(2);
+    expect(trip.points[0].lat).toBeCloseTo(42.5072494);
+    expect(trip.points[1].lon).toBeCloseTo(-83.0396698);
+  });
+
   test('returns null for invalid trip timing', () => {
     const missingStart = normalizeTrip({ endTime: '2025-01-01T00:10:00Z' }, 0);
     const reversed = normalizeTrip({

@@ -145,7 +145,7 @@ function normalizeTrip(trip, idx) {
 
   const durationMinutes = asNumber(trip?.durationMinutes);
   const durationSeconds =
-    asNumber(trip?.durationSeconds ?? trip?.duration_seconds) ??
+    asNumber(trip?.durationSec ?? trip?.durationSeconds ?? trip?.duration_seconds) ??
     (durationMinutes !== null ? durationMinutes * 60 : null);
   const durationMsRaw =
     asNumber(trip?.durationMs ?? trip?.duration_ms) ??
@@ -174,6 +174,12 @@ function normalizeTrip(trip, idx) {
   }
 
   const points = pointsRaw.map(pointFromRaw).filter(Boolean);
+  if (points.length === 0) {
+    const startPoint = pointFromRaw(trip?.startLocation ?? trip?.start_location);
+    const endPoint = pointFromRaw(trip?.endLocation ?? trip?.end_location);
+    if (startPoint) points.push(startPoint);
+    if (endPoint) points.push(endPoint);
+  }
 
   const distanceKmRaw = asNumber(trip?.distanceKm ?? trip?.distance_km);
   const distanceMetersRaw = asNumber(trip?.distanceMeters ?? trip?.distance_meters ?? trip?.distance);
@@ -192,6 +198,7 @@ function normalizeTrip(trip, idx) {
       trip?.uuid ??
       `trip-${idx + 1}`
     ),
+    vehicleId: trip?.vehicleId ?? trip?.vehicle_id ?? null,
     startMs,
     endMs,
     durationMs: endMs - startMs,
@@ -318,6 +325,30 @@ function registerAximoteIpc({ ipcMain, loadSettings, saveSettings, safeStorage }
         .sort((a, b) => a.startMs - b.startMs);
 
       return { success: true, trips };
+    } catch (err) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('aximote:getTrip', async (_event, { token, tripId } = {}) => {
+    try {
+      const settings = typeof loadSettings === 'function' ? loadSettings() : {};
+      if (settings?.devDisableApiRequests === true) {
+        return { success: false, error: 'API requests are disabled in developer settings' };
+      }
+
+      const tokenValue = token || readTokenSecure();
+      const headers = buildHeaders(tokenValue);
+      const id = String(tripId || '').trim();
+      if (!headers) return { success: false, error: 'Missing Personal Access Token' };
+      if (!id) return { success: false, error: 'Missing trip id' };
+
+      const response = await queryAximote([buildAximoteTripDetailPath(id)], headers);
+      if (!response.ok) return { success: false, error: response.error?.message || 'Failed to load trip details' };
+
+      const trip = normalizeTrip(response.payload, 0);
+      if (!trip) return { success: false, error: 'Trip details were missing required time fields' };
+      return { success: true, trip };
     } catch (err) {
       return { success: false, error: err?.message || String(err) };
     }

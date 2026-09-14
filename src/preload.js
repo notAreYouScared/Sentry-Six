@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSentryUsbDriveDetail: (driveId) => ipcRenderer.invoke('sentryUsb:getDriveDetail', driveId),
   aximoteListVehicles: (token) => ipcRenderer.invoke('aximote:listVehicles', token),
   aximoteListTrips: (params) => ipcRenderer.invoke('aximote:listTrips', params),
+  aximoteGetTrip: (params) => ipcRenderer.invoke('aximote:getTrip', params),
   aximoteSetToken: (token) => ipcRenderer.invoke('aximote:setToken', token),
   aximoteIsConfigured: () => ipcRenderer.invoke('aximote:isConfigured'),
   reverseGeocode: (coords) => ipcRenderer.invoke('geo:reverseGeocode', coords),

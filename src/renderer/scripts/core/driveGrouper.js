@@ -738,6 +738,8 @@ export function buildAximoteDrives(trips, { vehicleLabel = '' } = {}) {
 
         drives.push({
             id: `aximote-${trip.id ?? i + 1}`,
+            aximoteTripId: String(trip.id ?? i + 1),
+            vehicleId: trip.vehicleId ?? null,
             source: 'aximote',
             date: new Date(startMs).toISOString().slice(0, 10),
             startMs,
