@@ -111,6 +111,12 @@ export function initSettingsModal() {
     const browseDriveDataFileBtn = $('browseDriveDataFileBtn');
     const clearDriveDataFileBtn = $('clearDriveDataFileBtn');
     const driveDataFileStatus = $('driveDataFileStatus');
+    const aximotePatInput = $('aximotePatInput');
+    const aximoteSavePatBtn = $('aximoteSavePatBtn');
+    const aximoteLoadVehiclesBtn = $('aximoteLoadVehiclesBtn');
+    const aximoteVehicleSelect = $('aximoteVehicleSelect');
+    const aximoteSyncTripsBtn = $('aximoteSyncTripsBtn');
+    const aximoteStatus = $('aximoteStatus');
 
     // Initialize settings values
     if (settingsDashboardToggle && state) settingsDashboardToggle.checked = state.ui.dashboardEnabled;
@@ -564,6 +570,120 @@ export function initSettingsModal() {
             // Clear drive state in main app
             if (window._clearSentryUsbData) window._clearSentryUsbData();
             clearDriveDataFileBtn.blur();
+        };
+    }
+
+    function setAximoteStatus(text, type = '') {
+        if (!aximoteStatus) return;
+        aximoteStatus.textContent = text || '';
+        aximoteStatus.className = type ? `folder-status ${type}` : 'folder-status';
+    }
+
+    function populateAximoteVehicles(vehicles, selectedId = '') {
+        if (!aximoteVehicleSelect) return;
+        aximoteVehicleSelect.innerHTML = '<option value="">Select a vehicle</option>';
+        for (const v of (vehicles || [])) {
+            const opt = document.createElement('option');
+            opt.value = String(v.id);
+            opt.textContent = String(v.label || v.id);
+            if (String(v.id) === String(selectedId || '')) opt.selected = true;
+            aximoteVehicleSelect.appendChild(opt);
+        }
+    }
+
+    if (window.electronAPI?.getSetting) {
+        Promise.all([
+            window.electronAPI.getSetting('aximotePat'),
+            window.electronAPI.getSetting('aximoteVehicleId'),
+            window.electronAPI.getSetting('aximoteVehicleName')
+        ]).then(([savedPat, savedVehicleId, savedVehicleName]) => {
+            if (aximotePatInput && savedPat) aximotePatInput.value = savedPat;
+            if (aximoteVehicleSelect && savedVehicleId) {
+                populateAximoteVehicles(
+                    [{ id: savedVehicleId, label: savedVehicleName || `Selected (${savedVehicleId})` }],
+                    savedVehicleId
+                );
+            }
+        }).catch(() => {});
+    }
+
+    if (aximoteSavePatBtn) {
+        aximoteSavePatBtn.onclick = async (e) => {
+            e.preventDefault();
+            const token = (aximotePatInput?.value || '').trim();
+            if (!token) {
+                setAximoteStatus('Enter your Personal Access Token first.', 'error');
+                return;
+            }
+            await window.electronAPI?.setSetting?.('aximotePat', token);
+            setAximoteStatus('Aximote token saved.', 'success');
+            aximoteSavePatBtn.blur();
+        };
+    }
+
+    if (aximoteLoadVehiclesBtn) {
+        aximoteLoadVehiclesBtn.onclick = async (e) => {
+            e.preventDefault();
+            const token = (aximotePatInput?.value || '').trim();
+            if (!token) {
+                setAximoteStatus('Enter your Personal Access Token first.', 'error');
+                return;
+            }
+            aximoteLoadVehiclesBtn.disabled = true;
+            setAximoteStatus('Loading vehicles…', 'success');
+            try {
+                await window.electronAPI?.setSetting?.('aximotePat', token);
+                const res = await window.electronAPI?.aximoteListVehicles?.(token);
+                if (!res?.success) {
+                    setAximoteStatus(res?.error || 'Unable to load vehicles.', 'error');
+                    return;
+                }
+                const vehicles = Array.isArray(res.vehicles) ? res.vehicles : [];
+                const selectedId = await window.electronAPI?.getSetting?.('aximoteVehicleId');
+                populateAximoteVehicles(vehicles, selectedId || '');
+                if (vehicles.length === 0) {
+                    setAximoteStatus('No vehicles returned for this account.', 'error');
+                } else {
+                    setAximoteStatus(`Loaded ${vehicles.length} vehicle${vehicles.length === 1 ? '' : 's'}.`, 'success');
+                }
+            } catch (err) {
+                setAximoteStatus(err?.message || String(err), 'error');
+            } finally {
+                aximoteLoadVehiclesBtn.disabled = false;
+                aximoteLoadVehiclesBtn.blur();
+            }
+        };
+    }
+
+    if (aximoteVehicleSelect) {
+        aximoteVehicleSelect.onchange = async () => {
+            const selectedId = aximoteVehicleSelect.value || '';
+            const selectedName = aximoteVehicleSelect.options[aximoteVehicleSelect.selectedIndex]?.textContent || '';
+            await window.electronAPI?.setSetting?.('aximoteVehicleId', selectedId || null);
+            await window.electronAPI?.setSetting?.('aximoteVehicleName', selectedId ? selectedName : null);
+            if (selectedId) setAximoteStatus(`Selected ${selectedName}.`, 'success');
+            aximoteVehicleSelect.blur();
+        };
+    }
+
+    if (aximoteSyncTripsBtn) {
+        aximoteSyncTripsBtn.onclick = async (e) => {
+            e.preventDefault();
+            aximoteSyncTripsBtn.disabled = true;
+            setAximoteStatus('Syncing trips…', 'success');
+            try {
+                const result = await window._syncAximoteTrips?.();
+                if (result?.success) {
+                    setAximoteStatus(`Synced ${result.driveCount ?? 0} trips.`, 'success');
+                } else {
+                    setAximoteStatus(result?.error || 'Trip sync failed.', 'error');
+                }
+            } catch (err) {
+                setAximoteStatus(err?.message || String(err), 'error');
+            } finally {
+                aximoteSyncTripsBtn.disabled = false;
+                aximoteSyncTripsBtn.blur();
+            }
         };
     }
 

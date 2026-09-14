@@ -1899,6 +1899,12 @@
                             </svg>
                             <span>SentryUSB</span>
                         </button>
+                        <button class="settings-nav-item" data-target="aximote">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 12h18M8 7l-5 5 5 5M16 7l5 5-5 5"/>
+                            </svg>
+                            <span>Aximote</span>
+                        </button>
                         <button class="settings-nav-item" data-target="about">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                 stroke-linecap="round" stroke-linejoin="round">
@@ -2331,6 +2337,39 @@
                                     </div>
                                 </div>
                             </label>
+                        </div>
+                    </div>
+
+                    <!-- Aximote Section -->
+                    <div class="settings-accordion" data-section="aximote">
+                        <div class="settings-accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                            <div class="settings-accordion-header-left">
+                                <svg class="settings-accordion-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 12h18M8 7l-5 5 5 5M16 7l5 5-5 5"/>
+                                </svg>
+                                <span class="settings-accordion-title">Aximote</span>
+                            </div>
+                            <span class="material-symbols-outlined mi-sm">expand_more</span>
+                        </div>
+                        <div class="settings-accordion-body">
+                            <div class="input-row">
+                                <input type="password" id="aximotePatInput" class="text-input" placeholder="Aximote Personal Access Token">
+                                <button id="aximoteSavePatBtn" class="btn btn-secondary btn-small">Save</button>
+                            </div>
+                            <div class="select-row">
+                                <div class="select-row-info">
+                                    <span class="select-row-label">Vehicle</span>
+                                    <span class="toggle-row-desc">Load vehicles from Aximote and pick one for trip sync.</span>
+                                </div>
+                                <select id="aximoteVehicleSelect" class="settings-select">
+                                    <option value="">Select a vehicle</option>
+                                </select>
+                            </div>
+                            <div class="about-buttons-row">
+                                <button id="aximoteLoadVehiclesBtn" class="btn btn-secondary">Load Vehicles</button>
+                                <button id="aximoteSyncTripsBtn" class="btn btn-primary">Sync Trips</button>
+                            </div>
+                            <div id="aximoteStatus" class="folder-status"></div>
                         </div>
                     </div>
 

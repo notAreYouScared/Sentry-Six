@@ -98,6 +98,9 @@ function createInitialState() {
     sentryUsb: {
       // Path to the drive-data.json file (persisted in file-based settings)
       dataPath: null,
+      source: null, // 'sentryusb' | 'aximote' | null
+      vehicleId: null,
+      vehicleName: null,
 
       // Computed Drive objects from grouping StoreData routes
       drives: [],

@@ -42,7 +42,7 @@ import {
     initClipBrowser, renderClipList, highlightSelectedClip,
     buildDisplayItems, parseTimestampKeyToEpochMs
 } from './scripts/core/clipBrowser.js';
-import { matchClipsTodrives } from './scripts/core/driveGrouper.js';
+import { matchClipsTodrives, buildAximoteDrives, matchAximoteTripsToClips } from './scripts/core/driveGrouper.js';
 import { initDriveBrowser, renderDriveList, setDriveTagFilter } from './scripts/core/driveBrowser.js';
 import { initI18n, t, onLanguageChange } from './scripts/lib/i18n.js';
 
@@ -1396,6 +1396,34 @@ let showDriveStats = localStorage.getItem(SHOW_DRIVE_STATS_KEY) !== '0';
 const SHOW_FSD_EVENTS_KEY = 'showFsdEvents';
 let showFsdEvents = localStorage.getItem(SHOW_FSD_EVENTS_KEY) !== '0';
 
+function refreshDriveFootageMatches() {
+    const drives = state.sentryUsb?.drives || [];
+    if (drives.length === 0) {
+        state.sentryUsb.hasFootage = new Set();
+        return;
+    }
+
+    if (state.sentryUsb.source === 'aximote') {
+        const { hasFootage, matchedKeysByDriveId } = matchAximoteTripsToClips(
+            drives,
+            library.clipGroups,
+            folderStructure?.dates
+        );
+        state.sentryUsb.hasFootage = hasFootage;
+        for (const drive of drives) {
+            drive.routeTimestampKeys = matchedKeysByDriveId.get(drive.id) || [];
+            drive.clipCount = drive.routeTimestampKeys.length;
+        }
+        return;
+    }
+
+    state.sentryUsb.hasFootage = matchClipsTodrives(
+        drives,
+        library.clipGroups,
+        folderStructure?.dates
+    );
+}
+
 initDriveBrowser({
     getState: () => state,
     getDriveState: () => state.sentryUsb,
@@ -1509,7 +1537,9 @@ function refreshFsdEventMarkers() {
  */
 async function selectDriveCollection(drive) {
     // Collect all unique calendar dates this drive spans (from its route timestamp keys)
-    const neededDates = [...new Set(drive.routeTimestampKeys.map(k => k.split('_')[0]).filter(Boolean))];
+    const routeKeys = Array.isArray(drive.routeTimestampKeys) ? drive.routeTimestampKeys : [];
+    const neededDates = [...new Set(routeKeys.map(k => k.split('_')[0]).filter(Boolean))];
+    if (neededDates.length === 0 && drive.date) neededDates.push(drive.date);
 
     if (window.electronAPI && folderStructure?.dateHandles) {
         // Load the primary date first (this populates library.clipGroups via mergeIntoLibrary)
@@ -1535,9 +1565,15 @@ async function selectDriveCollection(drive) {
         }
     }
 
-    const driveKeys = new Set(drive.routeTimestampKeys);
+    const driveKeys = new Set(routeKeys);
+    const neededDateSet = new Set(neededDates);
     const matchingGroups = library.clipGroups
-        .filter(g => g.timestampKey && driveKeys.has(g.timestampKey))
+        .filter(g => {
+            if (!g.timestampKey) return false;
+            if (driveKeys.size > 0) return driveKeys.has(g.timestampKey);
+            const datePart = g.timestampKey.split('_')[0];
+            return neededDateSet.has(datePart);
+        })
         .sort((a, b) => (a.timestampKey || '').localeCompare(b.timestampKey || ''));
 
     if (matchingGroups.length === 0) {
@@ -1571,9 +1607,21 @@ async function selectDriveCollection(drive) {
 
     // Convert full drive route to mapPath format for GPS map pre-population.
     // drive.points are 5-tuples: [lat, lng, 0, speedMps, autopilotActive(0|1)]
-    const driveMapPath = (drive.points ?? []).map(p => ({
-        lat: p[0], lon: p[1], timestampMs: 0, autopilot: p[4] > 0
-    }));
+    const driveMapPath = Array.isArray(drive.pathPoints) && drive.pathPoints.length > 0
+        ? drive.pathPoints.map(p => ({
+            lat: p.lat,
+            lon: p.lon,
+            timestampMs: p.timestampMs ?? 0,
+            autopilot: false,
+            heading: p.heading ?? 0
+        }))
+        : (drive.points ?? []).map(p => ({
+            lat: p[0],
+            lon: p[1],
+            timestampMs: 0,
+            autopilot: p[4] > 0,
+            heading: p[2] ?? 0
+        }));
 
     const collKey = `drive-${drive.id}`;
     const coll = {
@@ -1817,6 +1865,9 @@ async function loadSentryUsbData(filePath) {
             console.log(`[SentryUSB] File keys: ${(topKeys || []).join(', ')} | Routes: ${routesLen ?? 'not found'}`);
 
             sentryUsb.dataPath = filePath;
+            sentryUsb.source = 'sentryusb';
+            sentryUsb.vehicleId = null;
+            sentryUsb.vehicleName = null;
             sentryUsb.drives = drives;
             sentryUsb.loaded = true;
 
@@ -1824,7 +1875,7 @@ async function loadSentryUsbData(filePath) {
             // Pass folderStructure.dates as a fallback so drives from dates other than
             // the currently-loaded date still get the Footage badge (Electron mode loads
             // clips one date at a time, so library.clipGroups is date-scoped).
-            sentryUsb.hasFootage = matchClipsTodrives(drives, library.clipGroups, folderStructure?.dates);
+            refreshDriveFootageMatches();
 
             console.log(`[SentryUSB] Loaded ${driveCount} drives from ${routeCount} routes`);
             console.log(`[SentryUSB] Footage matched: ${sentryUsb.hasFootage.size}/${driveCount} drives`);
@@ -1862,6 +1913,9 @@ function clearSentryUsbData() {
     sentryUsb.hasFootage = new Set();
     sentryUsb.loaded = false;
     sentryUsb.dataPath = null;
+    sentryUsb.source = null;
+    sentryUsb.vehicleId = null;
+    sentryUsb.vehicleName = null;
 
     switchToClipsTab();
     updateDrivesTabVisibility();
@@ -1883,6 +1937,63 @@ function updateDrivesTabVisibility() {
 window._loadSentryUsbData = loadSentryUsbData;
 window._clearSentryUsbData = clearSentryUsbData;
 
+async function syncAximoteTrips({ silent = false } = {}) {
+    const api = window.electronAPI;
+    if (!api?.getSetting || !api?.aximoteListTrips) {
+        return { success: false, error: 'Aximote integration unavailable' };
+    }
+
+    const [token, vehicleId, vehicleName] = await Promise.all([
+        api.getSetting('aximotePat'),
+        api.getSetting('aximoteVehicleId'),
+        api.getSetting('aximoteVehicleName')
+    ]);
+
+    if (!token || !vehicleId) {
+        if (!silent) notify('Set your Aximote token and vehicle first.', { type: 'warning' });
+        return { success: false, error: 'Missing token or vehicle' };
+    }
+
+    const sentryUsb = state.sentryUsb;
+    sentryUsb.loading = true;
+    try { renderDriveList(); } catch {}
+
+    try {
+        const result = await api.aximoteListTrips({ token, vehicleId });
+        if (!result?.success) {
+            const err = result?.error || 'Failed to load Aximote trips';
+            if (!silent) notify(err, { type: 'error' });
+            return { success: false, error: err };
+        }
+
+        const drives = buildAximoteDrives(result.trips || [], { vehicleLabel: vehicleName || '' });
+        sentryUsb.source = 'aximote';
+        sentryUsb.dataPath = null;
+        sentryUsb.vehicleId = String(vehicleId);
+        sentryUsb.vehicleName = vehicleName || null;
+        sentryUsb.drives = drives;
+        sentryUsb.loaded = true;
+        refreshDriveFootageMatches();
+        updateDrivesTabVisibility();
+        renderDriveList();
+
+        if (!silent) {
+            notify(`Aximote synced: ${drives.length} trip${drives.length === 1 ? '' : 's'} loaded.`, { type: 'success' });
+        }
+        return { success: true, driveCount: drives.length };
+    } catch (err) {
+        const error = err?.message || String(err);
+        if (!silent) notify(error, { type: 'error' });
+        return { success: false, error };
+    } finally {
+        sentryUsb.loading = false;
+        try { updateDrivesTabVisibility(); } catch {}
+        try { renderDriveList(); } catch {}
+    }
+}
+
+window._syncAximoteTrips = syncAximoteTrips;
+
 // Re-render drive list when time format changes so times update immediately
 window.addEventListener('timeFormatChanged', () => {
     if (driveList && driveList.style.display !== 'none') renderDriveList();
@@ -1902,6 +2013,21 @@ async function loadSentryUsbDataOnStartup() {
 
 // Load after clips folder startup (slight delay to avoid competing with folder load)
 setTimeout(loadSentryUsbDataOnStartup, 800);
+
+// Auto-load Aximote trips on startup when configured and no SentryUSB file was loaded.
+async function loadAximoteTripsOnStartup() {
+    if (state.sentryUsb.loaded) return;
+    if (!window.electronAPI?.getSetting) return;
+    const [token, vehicleId] = await Promise.all([
+        window.electronAPI.getSetting('aximotePat'),
+        window.electronAPI.getSetting('aximoteVehicleId')
+    ]);
+    if (token && vehicleId) {
+        await syncAximoteTrips({ silent: true });
+    }
+}
+
+setTimeout(loadAximoteTripsOnStartup, 1200);
 
 // Check for updates on startup (unless API requests are disabled in developer settings).
 // Runs silently in the background — if an update is available, the existing
@@ -3085,9 +3211,7 @@ function mergeIntoLibrary(built, date) {
 
     // If SentryUSB drive data is loaded, re-match drives against the new clip set.
     if (state.sentryUsb?.loaded && state.sentryUsb.drives?.length > 0) {
-        state.sentryUsb.hasFootage = matchClipsTodrives(
-            state.sentryUsb.drives, library.clipGroups, folderStructure?.dates
-        );
+        refreshDriveFootageMatches();
         updateDrivesTabVisibility();
         renderDriveList();
     }
@@ -3290,7 +3414,7 @@ async function handleFolderFiles(fileList, directoryName = null) {
 
     // Re-run clip-to-drive matching with newly loaded clips
     if (state.sentryUsb.loaded && state.sentryUsb.drives.length > 0) {
-        state.sentryUsb.hasFootage = matchClipsTodrives(state.sentryUsb.drives, library.clipGroups, folderStructure?.dates);
+        refreshDriveFootageMatches();
         // Refresh drive list if currently visible
         if (driveList && driveList.style.display !== 'none') {
             renderDriveList();
@@ -4323,6 +4447,7 @@ function telemetryAnimationLoop() {
     
     if (!nativeVideo.isTransitioning) {
         const currentVidMs = (vid.currentTime || 0) * 1000;
+        const collectionMs = getCollectionPlaybackMs(currentVidMs);
         
         const sei = findSeiAtTime(nativeVideo.seiData, currentVidMs);
         if (sei) {
@@ -4330,6 +4455,7 @@ function telemetryAnimationLoop() {
             nativeVideo.lastSeiTimeMs = currentVidMs;
             nativeVideo.dashboardReset = false;
         } else {
+            if (state.ui.mapEnabled) updateAximoteMapMarker(collectionMs);
             const lastSei = nativeVideo.lastSeiTimeMs ?? -Infinity;
             const timeSinceLastSei = currentVidMs - lastSei;
             if (timeSinceLastSei > 2000 && !nativeVideo.dashboardReset) {
@@ -4355,6 +4481,44 @@ function stopTelemetryLoop() {
     }
 }
 
+function getCollectionPlaybackMs(currentVidMs) {
+    if (!state.collection.active || !state.ui.nativeVideoMode) return currentVidMs;
+    const segIdx = nativeVideo.currentSegmentIdx >= 0 ? nativeVideo.currentSegmentIdx : 0;
+    const segStartSec = nativeVideo.cumulativeStarts?.[segIdx] || 0;
+    return segStartSec * 1000 + currentVidMs;
+}
+
+function getAximotePathPointAtMs(playbackMs) {
+    const path = state.collection.active?.driveMapPath;
+    if (!Array.isArray(path) || path.length === 0) return null;
+    const hasTiming = Number.isFinite(path[0]?.timestampMs) && path[path.length - 1]?.timestampMs > path[0]?.timestampMs;
+    if (!hasTiming) return null;
+
+    let idx = 0;
+    while (idx + 1 < path.length && (path[idx + 1].timestampMs || 0) <= playbackMs) idx++;
+    const point = path[idx];
+    const next = path[Math.min(path.length - 1, idx + 1)];
+    const heading = Number.isFinite(point?.heading) ? point.heading : (() => {
+        if (!next || next === point) return 0;
+        const dy = next.lat - point.lat;
+        const dx = next.lon - point.lon;
+        return (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+    })();
+    return {
+        latitudeDeg: point.lat,
+        longitudeDeg: point.lon,
+        headingDeg: heading
+    };
+}
+
+function updateAximoteMapMarker(playbackMs) {
+    if (state.sentryUsb.source !== 'aximote') return false;
+    const pseudoSei = getAximotePathPointAtMs(playbackMs);
+    if (!pseudoSei) return false;
+    updateMapMarker(pseudoSei, () => true);
+    return true;
+}
+
 function onMasterTimeUpdate() {
     const vid = nativeVideo.master || videoMain;
     if (!vid) return;
@@ -4377,6 +4541,7 @@ function onMasterTimeUpdate() {
             nativeVideo.lastSeiTimeMs = currentVidMs;
             nativeVideo.dashboardReset = false;
         } else {
+            if (state.ui.mapEnabled) updateAximoteMapMarker(getCollectionPlaybackMs(currentVidMs));
             const lastSei = nativeVideo.lastSeiTimeMs ?? -Infinity;
             const timeSinceLastSei = currentVidMs - lastSei;
             if (timeSinceLastSei > 2000 && !nativeVideo.dashboardReset) {
